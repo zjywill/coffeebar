@@ -20,6 +20,9 @@ final class LayoutManager {
     private var knownApps: Set<String>
     /// 上次扫描看到的窗口 ID，变了才做昂贵的辅助功能扫描。
     private var lastWindowIDs: Set<CGWindowID> = []
+    /// 上次检查时每个窗口在哪一侧。已存在的窗口换了侧 = 用户自己拖的，记为意图；
+    /// 新出现的窗口（App 重启、系统重排）才按记忆的布局纠正。
+    private var lastSides: [CGWindowID: Side] = [:]
 
     /// 由控制器提供：当前是否允许挪动（没在整理、没有临时挪出的图标、面板没开）。
     var canMove: () -> Bool = { true }
@@ -32,9 +35,9 @@ final class LayoutManager {
     private var moveFailures: [CGWindowID: Int] = [:]
     private static let maxMoveFailures = 3
 
-    private func move(_ item: MenuBarItem, toLeftOf target: CGWindowID) async {
+    private func move(_ item: MenuBarItem, toLeftOf target: CGWindowID, rightSide: Bool = false) async {
         guard moveFailures[item.windowID, default: 0] < Self.maxMoveFailures else { return }
-        if await ItemMover.move(windowID: item.windowID, ownerPID: item.ownerPID, toLeftOf: target) == nil {
+        if await ItemMover.move(windowID: item.windowID, ownerPID: item.ownerPID, toLeftOf: target, rightSide: rightSide) == nil {
             moveFailures[item.windowID, default: 0] += 1
             if moveFailures[item.windowID] == Self.maxMoveFailures {
                 NSLog("CoffeeBar: giving up on moving window \(item.windowID)")
@@ -95,7 +98,8 @@ final class LayoutManager {
         guard NSEvent.pressedMouseButtons == 0, !NSEvent.modifierFlags.contains(.command) else { return }
         let items = MenuBarScanner.allStatusItems()
         let ids = Set(items.map(\.windowID))
-        guard force || ids != lastWindowIDs else { return }
+        let sidesChanged = items.contains { lastSides[$0.windowID] != (MenuBarScanner.isOnScreen($0.bounds) ? Side.visible : .hidden) }
+        guard force || ids != lastWindowIDs || sidesChanged else { return }
         NSLog("CoffeeBar: layout check running over \(items.count) items")
         lastWindowIDs = ids
 
@@ -114,7 +118,7 @@ final class LayoutManager {
                 if Self.isSystemItem(item, extras: extras) {
                     guard !MenuBarScanner.isOnScreen(item.bounds), moveFailures[item.windowID, default: 0] < Self.maxMoveFailures else { continue }
                     NSLog("CoffeeBar: system item drifted into hidden area, moving it back")
-                    await move(item, toLeftOf: toggle)
+                    await move(item, toLeftOf: toggle, rightSide: true)
                     acted = true
                     break
                 }
@@ -128,7 +132,7 @@ final class LayoutManager {
                     changed = true
                     if actual == .hidden {
                         NSLog("CoffeeBar: new app \(bundleID), revealing its item")
-                        await move(item, toLeftOf: toggle)
+                        await move(item, toLeftOf: toggle, rightSide: true)
                         acted = true
                         break
                     }
@@ -137,8 +141,19 @@ final class LayoutManager {
 
                 guard let wanted = layout[bundleID], wanted != actual,
                       moveFailures[item.windowID, default: 0] < Self.maxMoveFailures else { continue }
+                if let previous = lastSides[item.windowID], previous != actual {
+                    // 这个窗口上次检查时还在另一侧，中间没重启：是用户自己拖过去的，尊重它。
+                    NSLog("CoffeeBar: user moved \(bundleID) to \(actual.rawValue), remembering")
+                    layout[bundleID] = actual
+                    changed = true
+                    continue
+                }
                 NSLog("CoffeeBar: \(bundleID) drifted to \(actual.rawValue), moving back to \(wanted.rawValue)")
-                await move(item, toLeftOf: wanted == .visible ? toggle : separator)
+                if wanted == .visible {
+                    await move(item, toLeftOf: toggle, rightSide: true)
+                } else {
+                    await move(item, toLeftOf: separator)
+                }
                 acted = true
                 break
             }
@@ -147,7 +162,9 @@ final class LayoutManager {
             extras = await refreshAccessibilityIndex()
         }
         if changed { save() }
-        lastWindowIDs = Set(MenuBarScanner.allStatusItems().map(\.windowID))
+        let final = MenuBarScanner.allStatusItems()
+        lastWindowIDs = Set(final.map(\.windowID))
+        lastSides = Dictionary(uniqueKeysWithValues: final.map { ($0.windowID, MenuBarScanner.isOnScreen($0.bounds) ? Side.visible : .hidden) })
     }
 
     // MARK: - 工具

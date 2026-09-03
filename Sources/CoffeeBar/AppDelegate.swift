@@ -14,7 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         if let name = ProcessInfo.processInfo.environment["COFFEEBAR_DRIFT"] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [controller] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [controller] in
                 controller?.debugDrift(appNamed: name)
             }
         }
