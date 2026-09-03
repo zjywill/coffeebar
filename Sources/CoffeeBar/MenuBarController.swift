@@ -25,6 +25,14 @@ final class MenuBarController: NSObject {
     private let layoutManager = LayoutManager()
     private var outsideClickMonitor: Any?
 
+    enum RevealMode: String { case section, item }
+    private static let revealModeKey = "CoffeeBar.revealMode"
+    /// 从面板打开图标的方式。默认展开整段：没有合成鼠标事件，不闪、不动光标。
+    private var revealMode: RevealMode {
+        get { RevealMode(rawValue: UserDefaults.standard.string(forKey: Self.revealModeKey) ?? "") ?? .section }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Self.revealModeKey) }
+    }
+
     private static let panelOnlyOnBuiltInKey = "CoffeeBar.panelOnlyOnBuiltIn"
     /// 外接显示器够宽，不需要面板；只在内建屏（有刘海、窄）上用面板。
     private var panelOnlyOnBuiltIn: Bool {
@@ -299,6 +307,10 @@ final class MenuBarController: NSObject {
     }
 
     private func tempShowAndClick(_ item: MenuBarItem, extra: AXMenuExtra?, rightButton: Bool) async {
+        if revealMode == .section {
+            await revealSectionAndActivate(item, extra: extra, rightButton: rightButton)
+            return
+        }
         guard let toggleWindowID else { return }
         // 记下回程位置：原来右边那个图标的左边；没有右邻居就用左邻居的右边。
         let hidden = MenuBarScanner.hiddenItems()
@@ -318,6 +330,13 @@ final class MenuBarController: NSObject {
             tempShown.append(context)
         }
 
+        await activateOnScreen(item, extra: extra, rightButton: rightButton, rehide: true)
+    }
+
+    /// 图标已经在屏幕上了：用辅助功能按它，按 App 学到的方式决定要不要真实点击，
+    /// 只显示窗口的 App 替它激活到前台。
+    private func activateOnScreen(_ item: MenuBarItem, extra: AXMenuExtra?, rightButton: Bool, rehide: Bool) async {
+        let context = TempShown(item: item, returnLeftOf: nil, returnRightOf: nil, pid: extra?.pid, interfaceWindow: nil)
         // 窗口挪好了。辅助功能激活不依赖坐标，立刻按，让图标出现和高亮几乎同时发生；
         // 只有退回鼠标点击时才需要等 App 自己的坐标更新。
         var target = MenuBarScanner.bounds(of: item.windowID) ?? item.bounds
@@ -397,7 +416,7 @@ final class MenuBarController: NSObject {
         }
 
         guard let pid = context.pid, let targetApp = NSRunningApplication(processIdentifier: pid) else {
-            scheduleRehide(after: 1)
+            if rehide { scheduleRehide(after: 1) }
             return
         }
         try? await Task.sleep(nanoseconds: 400_000_000)
@@ -413,7 +432,36 @@ final class MenuBarController: NSObject {
             NSLog("CoffeeBar: no popup from \(item.ownerName), activating it")
             targetApp.activate()
         }
-        scheduleRehide(after: 1)
+        if rehide { scheduleRehide(after: 1) }
+    }
+
+    /// 展开整段隐藏区再激活（默认）：分隔符是我们自己的状态项，缩回去不需要任何合成鼠标事件，
+    /// 所以没有拖拽幽灵、没有插入闪、光标不动。代价是菜单打开期间所有隐藏图标都会露出来。
+    private func revealSectionAndActivate(_ item: MenuBarItem, extra: AXMenuExtra?, rightButton: Bool) async {
+        setInline(.expanded)
+        guard await ClickForwarder.waitUntilOnScreen(item.windowID) != nil else {
+            // 展开了也挤不进屏幕（屏幕太窄）：退回只露出该图标的方式。
+            setInline(.hidden)
+            if let toggleWindowID, await ItemMover.move(windowID: item.windowID, ownerPID: item.ownerPID, toLeftOf: toggleWindowID) != nil {
+                tempShown.append(TempShown(item: item, returnLeftOf: nil, returnRightOf: nil, pid: extra?.pid, interfaceWindow: nil))
+                await activateOnScreen(item, extra: extra, rightButton: rightButton, rehide: true)
+            }
+            return
+        }
+        let before = extra.map { MenuBarScanner.onScreenWindows(ownedBy: $0.pid) } ?? [:]
+        await activateOnScreen(item, extra: extra, rightButton: rightButton, rehide: false)
+        // 收回：目标 App 点击后弹出的窗口还开着、或鼠标按着，就等；否则撑回分隔符。
+        // 点击菜单栏以外的地方也会收（applyInlineState 里的监听），这里兜底处理 Esc 关菜单等情况。
+        guard let extra else { return }
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        let opened = MenuBarScanner.onScreenWindows(ownedBy: extra.pid).filter { before[$0.key] == nil }
+        for _ in 0..<600 {
+            guard inlineState == .expanded else { return }
+            let stillOpen = opened.keys.contains { MenuBarScanner.onScreenWindows(ownedBy: extra.pid)[$0] != nil }
+            if !stillOpen && NSEvent.pressedMouseButtons == 0 && !NSEvent.modifierFlags.contains(.command) { break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        if inlineState == .expanded { setInline(.hidden) }
     }
 
     /// 图标实在挪不动时的兜底：整体展开再点。
@@ -529,6 +577,10 @@ final class MenuBarController: NSObject {
         menu.addItem(arrange)
         menu.addItem(withTitle: L("While arranging, items left of “/” are hidden. ⌘-drag items or “/” to adjust."), action: nil, keyEquivalent: "")
         menu.addItem(.separator())
+        let onlyItem = NSMenuItem(title: L("Reveal only the clicked item (may flicker briefly)"), action: #selector(toggleRevealMode), keyEquivalent: "")
+        onlyItem.target = self
+        onlyItem.state = revealMode == .item ? .on : .off
+        menu.addItem(onlyItem)
         let builtIn = NSMenuItem(title: L("Use panel only on built-in display (expand inline on external displays)"), action: #selector(togglePanelOnlyOnBuiltIn), keyEquivalent: "")
         builtIn.target = self
         builtIn.state = panelOnlyOnBuiltIn ? .on : .off
@@ -559,6 +611,10 @@ final class MenuBarController: NSObject {
             axExtras = await Task.detached(priority: .userInitiated) { AccessibilityIndex.scan() }.value
             layoutManager.recordCurrent(extras: axExtras)
         }
+    }
+
+    @objc private func toggleRevealMode() {
+        revealMode = revealMode == .item ? .section : .item
     }
 
     @objc private func togglePanelOnlyOnBuiltIn() {

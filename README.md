@@ -14,14 +14,14 @@ Signed and notarized by Apple. Requires macOS 14 or later, Apple Silicon or Inte
 
 ## Features
 
-- **One-click access.** Click `<` to see every hidden icon in a panel. Click an icon and it works exactly like in the menu bar: menus open, windows come to the front.
+- **One-click access.** Click `<` to see every hidden icon in a panel. Click an icon and it works exactly like in the menu bar: menus open, windows come to the front. The hidden section expands while the menu is open and folds back when it closes. No synthetic mouse events, so your pointer is never touched.
 - **Search.** With the panel open, just type the app's name. Enter opens it.
 - **Drag to hide.** Hold ⌘ and drag an icon to the left of `<` to hide it, to the right to keep it. CoffeeBar remembers.
 - **Arrange mode.** Right-click `<` → *Arrange Items…* to see everything at once and drag icons around.
 - **Icons stay put.** After a restart, or when an app drops its icon somewhere random, it goes back where you put it.
 - **New apps stay visible** until you decide to hide them.
 - **System icons are never hidden.** Battery, Wi-Fi, Control Center, Spotlight and the input menu always stay.
-- **Notch and narrow screens** are fine: only the icon you click is brought into the menu bar, the rest stay hidden.
+- **Notch and narrow screens**: turn on *Reveal only the clicked item* and just that one icon is brought into the menu bar instead of the whole section.
 - **External display option.** On big monitors, `<` can simply expand the hidden icons inline instead of opening the panel.
 - **Only asks for Accessibility.** Nothing else.
 

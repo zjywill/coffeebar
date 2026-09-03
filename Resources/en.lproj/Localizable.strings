@@ -10,3 +10,4 @@
 "Use panel only on built-in display (expand inline on external displays)" = "Use panel only on built-in display (expand inline on external displays)";
 "Check for Updates…" = "Check for Updates…";
 "Quit CoffeeBar" = "Quit CoffeeBar";
+"Reveal only the clicked item (may flicker briefly)" = "Reveal only the clicked item (may flicker briefly)";
