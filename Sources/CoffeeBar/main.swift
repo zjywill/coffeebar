@@ -22,6 +22,13 @@ final class MenuBarController: NSObject {
     private var rehideTimer: Timer?
 
     override init() {
+        // 首次启动时把两个图标放在菜单栏最右侧并相邻，这样默认就把所有第三方图标藏起来。
+        // macOS 用 "NSStatusItem Preferred Position <autosaveName>" 记录位置，数值越小越靠右。
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: "NSStatusItem Preferred Position CoffeeBar.separator") == nil {
+            defaults.set(0, forKey: "NSStatusItem Preferred Position CoffeeBar.toggle")
+            defaults.set(1, forKey: "NSStatusItem Preferred Position CoffeeBar.separator")
+        }
         let bar = NSStatusBar.system
         // 先创建的在右，后创建的在左。所以先建开关，再建分隔符。
         toggleItem = bar.statusItem(withLength: NSStatusItem.variableLength)
@@ -107,7 +114,7 @@ final class MenuBarController: NSObject {
 
     private func showContextMenu() {
         let menu = NSMenu()
-        menu.addItem(withTitle: "提示：按住 ⌘ 拖动 “/” 分隔符，它左边的图标会被隐藏", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "提示：“/” 左边的图标会被隐藏，按住 ⌘ 拖动图标或 “/” 调整", action: nil, keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "退出 CoffeeBar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         toggleItem.menu = menu

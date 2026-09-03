@@ -19,3 +19,11 @@ swift build -c release
 ## 要求
 
 macOS 13+，Swift 5.9+。
+
+## 重置位置
+
+位置记录在 `~/Library/Preferences/CoffeeBar.plist`，想恢复默认布局：
+
+```bash
+defaults delete CoffeeBar
+```
