@@ -82,14 +82,16 @@ final class DropPanel: NSPanel {
 
     // MARK: - 内容
 
-    func showItems(_ entries: [(MenuBarItem, NSImage?)], notice: (text: String, action: (() -> Void)?)?, anchor: NSRect) {
+    typealias NoticeButton = (title: String, action: () -> Void)
+
+    func showItems(_ entries: [(MenuBarItem, NSImage?)], notice: (text: String, buttons: [NoticeButton])?, anchor: NSRect) {
         let column = NSStackView()
         column.orientation = .vertical
         column.alignment = .trailing
         column.spacing = 6
 
         if let notice {
-            column.addArrangedSubview(makeNotice(notice.text, action: notice.action))
+            column.addArrangedSubview(makeNotice(notice.text, buttons: notice.buttons))
         }
 
         if entries.isEmpty, notice == nil {
@@ -133,27 +135,35 @@ final class DropPanel: NSPanel {
         return label
     }
 
-    private var noticeAction: (() -> Void)?
+    private var noticeActions: [() -> Void] = []
 
-    private func makeNotice(_ text: String, action: (() -> Void)?) -> NSView {
+    private func makeNotice(_ text: String, buttons: [NoticeButton]) -> NSView {
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6
         stack.addArrangedSubview(makeLabel(text))
-        if let action {
-            noticeAction = action
-            let button = NSButton(title: "打开系统设置", target: self, action: #selector(noticeButtonClicked))
-            button.bezelStyle = .rounded
-            button.controlSize = .small
-            stack.addArrangedSubview(button)
+        noticeActions = buttons.map(\.action)
+        if !buttons.isEmpty {
+            let row = makeRow()
+            row.spacing = 8
+            for (index, button) in buttons.enumerated() {
+                let control = NSButton(title: button.title, target: self, action: #selector(noticeButtonClicked(_:)))
+                control.bezelStyle = .rounded
+                control.controlSize = .small
+                control.tag = index
+                row.addArrangedSubview(control)
+            }
+            stack.addArrangedSubview(row)
         }
         return stack
     }
 
-    @objc private func noticeButtonClicked() {
-        noticeAction?()
+    @objc private func noticeButtonClicked(_ sender: NSButton) {
         dismiss()
+        if noticeActions.indices.contains(sender.tag) {
+            noticeActions[sender.tag]()
+        }
     }
 
     private func present(_ content: NSView, anchor: NSRect) {

@@ -24,6 +24,18 @@ enum Permissions {
         open("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
     }
 
+    /// 屏幕录制权限要重启进程才生效。
+    static func relaunch() {
+        let path = Bundle.main.bundleURL.pathExtension == "app"
+            ? Bundle.main.bundleURL.path
+            : Bundle.main.executablePath ?? ""
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = ["-c", "sleep 0.5; open -n \"\(path)\""]
+        try? task.run()
+        NSApp.terminate(nil)
+    }
+
     private static func open(_ url: String) {
         if let url = URL(string: url) {
             NSWorkspace.shared.open(url)

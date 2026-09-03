@@ -93,15 +93,16 @@ final class MenuBarController: NSObject {
         if !Permissions.hasScreenRecording {
             Permissions.requestScreenRecording()
             panel.showItems([], notice: (
-                "需要「屏幕录制」权限来预览隐藏的图标。授权后请重新启动 CoffeeBar。\n（或者按住 ⌥ 点击 “<” 直接在菜单栏里展开）",
-                Permissions.openScreenRecordingSettings
+                "需要「屏幕录制」权限来预览隐藏的图标。授权后 CoffeeBar 会自动重启。\n（或者按住 ⌥ 点击 “<” 直接在菜单栏里展开）",
+                [("打开系统设置", Permissions.openScreenRecordingSettings), ("重启 CoffeeBar", Permissions.relaunch)]
             ), anchor: anchor)
+            watchForScreenRecordingGrant()
             return
         }
 
         var items = MenuBarScanner.hiddenItems()
-        let notice: (String, (() -> Void)?)? = Permissions.hasAccessibility ? nil : (
-            "需要「辅助功能」权限才能点击面板里的图标。", Permissions.openAccessibilitySettings
+        let notice: (String, [DropPanel.NoticeButton])? = Permissions.hasAccessibility ? nil : (
+            "需要「辅助功能」权限才能点击面板里的图标。", [("打开系统设置", Permissions.openAccessibilitySettings)]
         )
 
         Task {
@@ -128,6 +129,19 @@ final class MenuBarController: NSObject {
 
             let entries = items.map { ($0, imageCache[$0.windowID]) }
             panel.showItems(entries, notice: notice, anchor: anchor)
+        }
+    }
+
+    private var grantWatcher: Timer?
+
+    /// 用户在系统设置里打开屏幕录制后，这个进程里的 ScreenCaptureKit 仍然不可用，只能重启。
+    private func watchForScreenRecordingGrant() {
+        grantWatcher?.invalidate()
+        grantWatcher = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { timer in
+            if Permissions.hasScreenRecording {
+                timer.invalidate()
+                Permissions.relaunch()
+            }
         }
     }
 
