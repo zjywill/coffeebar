@@ -62,11 +62,18 @@ enum MenuBarScanner {
     }
 
     static func bounds(of windowID: CGWindowID) -> CGRect? {
-        guard let list = CGWindowListCopyWindowInfo(.optionIncludingWindow, windowID) as? [[String: Any]],
-              let info = list.first,
-              let dict = info[kCGWindowBounds as String] as? NSDictionary
-        else { return nil }
-        return CGRect(dictionaryRepresentation: dict)
+        // optionIncludingWindow 只对在屏幕上的窗口有效；屏幕外的要翻全量列表。
+        if let list = CGWindowListCopyWindowInfo(.optionIncludingWindow, windowID) as? [[String: Any]],
+           let info = list.first,
+           let dict = info[kCGWindowBounds as String] as? NSDictionary,
+           let rect = CGRect(dictionaryRepresentation: dict) {
+            return rect
+        }
+        guard let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else { return nil }
+        for info in list where (info[kCGWindowNumber as String] as? Int).map({ CGWindowID($0) }) == windowID {
+            if let dict = info[kCGWindowBounds as String] as? NSDictionary { return CGRect(dictionaryRepresentation: dict) }
+        }
+        return nil
     }
 
     static func isOnScreen(_ rect: CGRect) -> Bool {

@@ -4,16 +4,18 @@ import AppKit
 /// 菜单栏图标从右往左排。我们放一个"分隔符" NSStatusItem，
 /// 把它的宽度拉到极大，分隔符左侧的所有图标就被挤出屏幕，等于"隐藏"。
 ///
-/// 三种状态：
+/// 两种状态：
 /// - 隐藏（默认）：分隔符撑满，图标在屏幕外。
-/// - 临时展开：点了面板里的图标后，把真图标移回菜单栏点一下；用户在菜单栏外松开鼠标就自动收回。
 /// - 整理模式：用户主动展开，用来 ⌘ 拖动排布图标；不会自动收回，再点一次 `<` 才收。
+///
+/// 点面板里的图标时不展开：用合成 ⌘ 拖拽把那**一个**图标挪到 `<` 左边，点它，
+/// 等它的菜单 / 弹窗关掉再挪回原位（Ice 的做法，也是 Bartender 的表现）。
 @MainActor
 final class MenuBarController: NSObject {
     private static let hiddenLength: CGFloat = 10_000
     private static let shownLength: CGFloat = 12
 
-    private enum InlineState { case hidden, temporary, arranging }
+    private enum InlineState { case hidden, arranging }
 
     private let toggleItem: NSStatusItem
     private let separatorItem: NSStatusItem
@@ -21,8 +23,19 @@ final class MenuBarController: NSObject {
     private let updater = UpdateController()
 
     private var inlineState: InlineState = .hidden
-    private var mouseUpMonitor: Any?
+
+    /// 一个临时挪出来的图标：记着它原来在谁左边，好挪回去。
+    private struct TempShown {
+        let item: MenuBarItem
+        let returnLeftOf: CGWindowID?
+        let returnRightOf: CGWindowID?
+        let pid: pid_t?
+        /// 点击后目标 App 新冒出来的窗口（菜单、弹窗或普通窗口），它还在就不收。
+        var interfaceWindow: CGWindowID?
+    }
+    private var tempShown: [TempShown] = []
     private var rehideTimer: Timer?
+    private var mouseUpMonitor: Any?
     /// 上次打开面板时扫到的辅助功能索引，点击兜底时用。
     private var axExtras: [AXMenuExtra] = []
 
@@ -135,6 +148,40 @@ final class MenuBarController: NSObject {
 
     func debugArrange() { setInline(.arranging) }
 
+    /// `<` 按钮的窗口 ID。NSStatusBarButton 的 windowNumber 在 macOS 26 上可能拿不到（负数），
+    /// 拿不到就从窗口列表里找：第一个在屏幕上、紧挨着分隔符右侧的状态项窗口。
+    private var toggleWindowID: CGWindowID? {
+        if let number = toggleItem.button?.window?.windowNumber, number > 0, number < Int(UInt32.max) { return CGWindowID(number) }
+        guard let frame = toggleItem.button?.window?.frame else { return nil }
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        let cgFrame = CGRect(x: frame.minX, y: primaryHeight - frame.maxY, width: frame.width, height: frame.height)
+        return MenuBarScanner.allStatusItems().min { abs($0.bounds.minX - cgFrame.minX) < abs($1.bounds.minX - cgFrame.minX) }?.windowID
+    }
+
+    /// 调试用：把某个 App 的隐藏图标单独挪到 `<` 左边，2 秒后挪回去。
+    func debugTempShow(appNamed name: String) {
+        var items = MenuBarScanner.hiddenItems()
+        axExtras = AccessibilityIndex.scan()
+        for i in items.indices {
+            if let extra = AccessibilityIndex.match(items[i].bounds, in: axExtras) { items[i].ownerName = extra.appName }
+        }
+        NSLog("CoffeeBar: toggle windowNumber = \(toggleItem.button?.window?.windowNumber ?? -999)")
+        guard let index = items.firstIndex(where: { $0.ownerName == name }),
+              let toggleWindowID = toggleWindowID
+        else { NSLog("CoffeeBar: no hidden item for \(name) or no toggle window"); return }
+        let item = items[index]
+        let rightNeighbor = index + 1 < items.count ? items[index + 1] : nil
+        Task {
+            let shown = await ItemMover.move(windowID: item.windowID, ownerPID: item.ownerPID, toLeftOf: toggleWindowID)
+            NSLog("CoffeeBar: temp show \(name) -> \(String(describing: shown))")
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if let rightNeighbor {
+                let back = await ItemMover.move(windowID: item.windowID, ownerPID: item.ownerPID, toLeftOf: rightNeighbor.windowID)
+                NSLog("CoffeeBar: moved back -> \(String(describing: back))")
+            }
+        }
+    }
+
     /// 调试用：不经过面板，直接对某个 App 的隐藏图标走一遍转发流程。
     func debugActivate(appNamed name: String) {
         var items = MenuBarScanner.hiddenItems()
@@ -157,43 +204,116 @@ final class MenuBarController: NSObject {
             Permissions.requestAccessibility()
             return
         }
-        setInline(.temporary)
         let extra = AccessibilityIndex.match(item.bounds, in: axExtras)
-        Task {
-            guard let rect = await ClickForwarder.waitUntilOnScreen(item.windowID) else {
-                // 展开了也挤不进屏幕（屏幕太窄或被刘海占了），只能通过辅助功能直接按。
-                NSLog("CoffeeBar: \(item.ownerName) never came on screen, AX press")
-                if let extra { _ = AccessibilityIndex.press(extra) }
+        Task { await tempShowAndClick(item, extra: extra, rightButton: rightButton) }
+    }
+
+    private func tempShowAndClick(_ item: MenuBarItem, extra: AXMenuExtra?, rightButton: Bool) async {
+        guard let toggleWindowID else { return }
+        // 记下回程位置：原来右边那个图标的左边；没有右邻居就用左邻居的右边。
+        let hidden = MenuBarScanner.hiddenItems()
+        var context = TempShown(item: item, returnLeftOf: nil, returnRightOf: nil, pid: extra?.pid, interfaceWindow: nil)
+        if let index = hidden.firstIndex(where: { $0.windowID == item.windowID }) {
+            if index + 1 < hidden.count { context = TempShown(item: item, returnLeftOf: hidden[index + 1].windowID, returnRightOf: nil, pid: extra?.pid, interfaceWindow: nil) }
+            else if index > 0 { context = TempShown(item: item, returnLeftOf: nil, returnRightOf: hidden[index - 1].windowID, pid: extra?.pid, interfaceWindow: nil) }
+        }
+
+        let alreadyShown = tempShown.contains { $0.item.windowID == item.windowID }
+        if !alreadyShown {
+            guard await ItemMover.move(windowID: item.windowID, ownerPID: item.ownerPID, toLeftOf: toggleWindowID) != nil else {
+                NSLog("CoffeeBar: could not move \(item.ownerName) into view, falling back to expanding everything")
+                await expandAllAndClick(item, extra: extra, rightButton: rightButton)
                 return
             }
-            // 窗口服务器报告图标回到屏幕时它还不能点：目标 App 自己的坐标还没更新，点击会穿到下面的窗口。
-            // 等 App 的辅助功能坐标也回到屏幕上；认不出 App 的就退而求其次等一段固定时间。
-            let started = Date()
-            var target = rect
-            if let extra, let axFrame = await AccessibilityIndex.waitUntilOnScreen(extra) {
-                target = axFrame
-            } else {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                target = MenuBarScanner.bounds(of: item.windowID) ?? rect
-            }
-            try? await Task.sleep(nanoseconds: 50_000_000)
-            NSLog("CoffeeBar: click \(item.ownerName) at \(target) after \(Int(Date().timeIntervalSince(started) * 1000)) ms")
-            let targetApp = extra.flatMap { NSRunningApplication(processIdentifier: $0.pid) }
-            let before = extra.map { MenuBarScanner.onScreenWindows(ownedBy: $0.pid) } ?? [:]
-            ClickForwarder.click(at: CGPoint(x: target.midX, y: target.midY), rightButton: rightButton)
+            tempShown.append(context)
+        }
 
-            // macOS 14 起 App 只有在收到真实用户输入后才能激活自己，合成点击不算，
-            // 所以"点图标就把窗口带到前台"的 App（没有菜单的那种）会被系统拒绝。
-            // 点完看一眼：目标 App 弹出了菜单 / 弹窗就不打扰；什么都没弹，就替它激活。
-            guard let extra, let targetApp else { return }
+        // 窗口挪好了，App 自己的坐标还要过一会儿才更新，等它也回到屏幕上再点。
+        var target = MenuBarScanner.bounds(of: item.windowID) ?? item.bounds
+        if let extra, let axFrame = await AccessibilityIndex.waitUntilOnScreen(extra) {
+            target = axFrame
+        } else {
             try? await Task.sleep(nanoseconds: 400_000_000)
-            let after = MenuBarScanner.onScreenWindows(ownedBy: extra.pid)
-            let poppedUp = after.contains { id, layer in before[id] == nil && layer > 0 }
-            if !poppedUp, !targetApp.isActive {
-                NSLog("CoffeeBar: no popup from \(item.ownerName), activating it")
-                targetApp.activate()
+            target = MenuBarScanner.bounds(of: item.windowID) ?? target
+        }
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        let before = context.pid.map { MenuBarScanner.onScreenWindows(ownedBy: $0) } ?? [:]
+        NSLog("CoffeeBar: click \(item.ownerName) at \(target)")
+        ClickForwarder.click(at: CGPoint(x: target.midX, y: target.midY), rightButton: rightButton)
+
+        guard let pid = context.pid, let targetApp = NSRunningApplication(processIdentifier: pid) else {
+            scheduleRehide(after: 1)
+            return
+        }
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        let after = MenuBarScanner.onScreenWindows(ownedBy: pid)
+        let newWindows = after.filter { before[$0.key] == nil }
+        if let index = tempShown.firstIndex(where: { $0.item.windowID == item.windowID }) {
+            tempShown[index].interfaceWindow = newWindows.keys.first
+        }
+        // macOS 14 起 App 只有在收到真实用户输入后才能激活自己，合成点击不算：
+        // 没弹出任何菜单 / 弹窗的（只显示窗口的那种 App），替它激活到前台。
+        let poppedUp = newWindows.contains { $0.value > 0 }
+        if !poppedUp, !targetApp.isActive {
+            NSLog("CoffeeBar: no popup from \(item.ownerName), activating it")
+            targetApp.activate()
+        }
+        scheduleRehide(after: 1)
+    }
+
+    /// 图标实在挪不动时的兜底：整体展开再点。
+    private func expandAllAndClick(_ item: MenuBarItem, extra: AXMenuExtra?, rightButton: Bool) async {
+        setInline(.arranging)
+        guard let rect = await ClickForwarder.waitUntilOnScreen(item.windowID) else {
+            if let extra { _ = AccessibilityIndex.press(extra) }
+            return
+        }
+        var target = rect
+        if let extra, let axFrame = await AccessibilityIndex.waitUntilOnScreen(extra) { target = axFrame }
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        ClickForwarder.click(at: CGPoint(x: target.midX, y: target.midY), rightButton: rightButton)
+    }
+
+    // MARK: - 收回临时挪出来的图标
+
+    private func scheduleRehide(after seconds: TimeInterval) {
+        rehideTimer?.invalidate()
+        rehideTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
+            Task { @MainActor in await self?.rehideTempShownIfIdle() }
+        }
+        if mouseUpMonitor == nil {
+            // 用户在别处松开鼠标（比如选了菜单项、点了别处关掉弹窗）时尽快收，不用等定时器。
+            mouseUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp, .rightMouseUp]) { [weak self] _ in
+                self?.scheduleRehide(after: 0.4)
             }
         }
+    }
+
+    /// 目标 App 的界面还开着、或者鼠标还按着，就过会儿再看；否则把图标挪回去。
+    private func rehideTempShownIfIdle() async {
+        guard !tempShown.isEmpty else { return }
+        let mouseDown = NSEvent.pressedMouseButtons != 0
+        let showingInterface = tempShown.contains { context in
+            guard let pid = context.pid, let window = context.interfaceWindow else { return false }
+            return MenuBarScanner.onScreenWindows(ownedBy: pid)[window] != nil
+        }
+        if mouseDown || showingInterface || NSEvent.modifierFlags.contains(.command) {
+            scheduleRehide(after: 1)
+            return
+        }
+        while let context = tempShown.popLast() {
+            let item = context.item
+            var moved: CGRect?
+            if let left = context.returnLeftOf {
+                moved = await ItemMover.move(windowID: item.windowID, ownerPID: item.ownerPID, toLeftOf: left)
+            } else if let right = context.returnRightOf {
+                moved = await ItemMover.move(windowID: item.windowID, ownerPID: item.ownerPID, toLeftOf: right, rightSide: true)
+            }
+            if moved == nil { NSLog("CoffeeBar: failed to move \(item.ownerName) back") }
+        }
+        if let mouseUpMonitor { NSEvent.removeMonitor(mouseUpMonitor); self.mouseUpMonitor = nil }
+        rehideTimer?.invalidate(); rehideTimer = nil
     }
 
     // MARK: - 菜单栏内展开
@@ -205,61 +325,8 @@ final class MenuBarController: NSObject {
 
     private func applyInlineState() {
         separatorItem.length = inlineState == .hidden ? Self.hiddenLength : Self.shownLength
-        let symbol: String
-        switch inlineState {
-        case .hidden: symbol = "chevron.left"
-        case .temporary: symbol = "chevron.right"
-        case .arranging: symbol = "checkmark"
-        }
-        toggleItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        toggleItem.button?.image = NSImage(systemSymbolName: inlineState == .arranging ? "checkmark" : "chevron.left", accessibilityDescription: nil)
         toggleItem.button?.toolTip = inlineState == .arranging ? "整理中：⌘ 拖动图标或 “/”，完成后点这里收回" : nil
-
-        if inlineState == .temporary {
-            startRehideWatchers()
-        } else {
-            stopRehideWatchers()
-        }
-    }
-
-    /// 临时展开时，在菜单栏以外松开鼠标（比如选了某个菜单项），或者 20 秒无操作，就自动收回。
-    /// 用 mouseUp 而不是 mouseDown，是为了等对方菜单项的动作先触发。按着 ⌘ 时不收，用户可能在拖图标。
-    private func startRehideWatchers() {
-        stopRehideWatchers()
-        mouseUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp, .rightMouseUp]) { [weak self] event in
-            guard let self else { return }
-            if event.modifierFlags.contains(.command) { return }
-            if !Self.isInMenuBar(event.locationInWindow) {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    if self.inlineState == .temporary { self.setInline(.hidden) }
-                }
-            }
-        }
-        rehideTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: false) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, self.inlineState == .temporary else { return }
-                if NSEvent.modifierFlags.contains(.command) { return }
-                self.setInline(.hidden)
-            }
-        }
-    }
-
-    private func stopRehideWatchers() {
-        if let mouseUpMonitor {
-            NSEvent.removeMonitor(mouseUpMonitor)
-            self.mouseUpMonitor = nil
-        }
-        rehideTimer?.invalidate()
-        rehideTimer = nil
-    }
-
-    /// AppKit 屏幕坐标（原点左下）。菜单栏高度用 frame 和 visibleFrame 的差算，刘海屏也对。
-    private static func isInMenuBar(_ point: NSPoint) -> Bool {
-        NSScreen.screens.contains { screen in
-            let menuBarTop = screen.frame.maxY
-            let menuBarBottom = screen.visibleFrame.maxY
-            return point.x >= screen.frame.minX && point.x <= screen.frame.maxX
-                && point.y >= menuBarBottom - 2 && point.y <= menuBarTop
-        }
     }
 
     // MARK: - 右键菜单
