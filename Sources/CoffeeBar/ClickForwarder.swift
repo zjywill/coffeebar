@@ -17,7 +17,7 @@ enum ClickForwarder {
     }
 
     /// 在屏幕坐标（CG 坐标系）合成一次点击。做法照 Thaw 的 postClickEvents：
-    /// 光标 warp 到点击点、等 10 毫秒、藏光标、按下、抬起两次（防止图标卡在按下态）、挪回原位、显示。
+    /// 藏光标、warp 到点击点、等 10 毫秒、按下、抬起两次（防止图标卡在按下态）、挪回原位、显示。
     static func click(at point: CGPoint, rightButton: Bool, windowID: CGWindowID? = nil, ownerPID: pid_t? = nil, targetPID: pid_t? = nil) {
         let source = CGEventSource(stateID: .hidSystemState)
         for state in [CGEventSuppressionState.eventSuppressionStateRemoteMouseDrag, .eventSuppressionStateSuppressionInterval] {
@@ -40,9 +40,10 @@ enum ClickForwarder {
         }
         let cursor = CGEvent(source: nil)?.location ?? point
         NSLog("CoffeeBar: click at \(point), cursor was \(cursor)")
+        // 先藏再 warp，避免光标在点击点露出一帧；等 10 毫秒让窗口服务器处理完 warp 再发事件。
+        CGDisplayHideCursor(CGMainDisplayID())
         CGWarpMouseCursorPosition(point)
         usleep(10_000)
-        CGDisplayHideCursor(CGMainDisplayID())
         make(downType)?.post(tap: .cgSessionEventTap)
         usleep(30_000)
         make(upType)?.post(tap: .cgSessionEventTap)

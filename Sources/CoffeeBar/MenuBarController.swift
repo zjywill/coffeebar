@@ -67,12 +67,6 @@ final class MenuBarController: NSObject {
     }
     private var tempShown: [TempShown] = []
 
-    /// 每个 App 学到的激活方式："ax" 或 "click"。
-    private static let ledgerKey = "CoffeeBar.activationLedger"
-    private var activationLedger: [String: String] {
-        get { UserDefaults.standard.dictionary(forKey: Self.ledgerKey) as? [String: String] ?? [:] }
-        set { UserDefaults.standard.set(newValue, forKey: Self.ledgerKey) }
-    }
     private var rehideTimer: Timer?
     private var mouseUpMonitor: Any?
     /// 上次打开面板时扫到的辅助功能索引，点击兜底时用。
@@ -378,102 +372,81 @@ final class MenuBarController: NSObject {
         }
     }
 
-    /// 图标已经在屏幕上了：用辅助功能按它，按 App 学到的方式决定要不要真实点击，
-    /// 只显示窗口的 App 替它激活到前台。
+    /// 图标已经在屏幕上了。照 Thaw 的 click(item:) / temporarilyShow：
+    /// 1. Electron 应用的托盘图标不认合成点击：对它 AXExtrasMenuBar 里对应的子元素 AXPress。
+    /// 2. 其他左键：辅助功能 AXShowMenu → AXPress，完全不碰鼠标。动作被接受、或者看到 App 有反应，就算完成，
+    ///    **不再补一次真实点击**。以前"没看到弹窗就补点一下来分辨"的做法正是光标乱跳的来源：
+    ///    补点会把光标 warp 到图标上，还会把刚打开的菜单又关掉。看不到反应只是不确定，不是失败。
+    /// 3. 只有辅助功能彻底失败（找不到元素、坐标对不上、两个动作都被拒且没反应）或右键，才合成点击：
+    ///    光标 warp 过去、藏起来、点完挪回原位（ClickForwarder，也是 Thaw 的 postClickEvents）。
     private func activateOnScreen(_ item: MenuBarItem, extra: AXMenuExtra?, rightButton: Bool, rehide: Bool) async {
-        let context = TempShown(item: item, returnLeftOf: nil, returnRightOf: nil, pid: extra?.pid, interfaceWindow: nil)
-        // 窗口挪好了。辅助功能激活不依赖坐标，立刻按，让图标出现和高亮几乎同时发生；
-        // 只有退回鼠标点击时才需要等 App 自己的坐标更新。
+        let pid = extra?.pid
+        var pids: Set<pid_t> = [item.ownerPID]
+        if let pid { pids.insert(pid) }
+        let before = pid.map { MenuBarScanner.onScreenWindows(ownedBy: $0) } ?? [:]
         var target = MenuBarScanner.bounds(of: item.windowID) ?? item.bounds
-        let before = context.pid.map { MenuBarScanner.onScreenWindows(ownedBy: $0) } ?? [:]
-        // 左键优先走辅助功能：完全不碰鼠标。
-        // 有的 App（Chrome 的 Gemini）接受 AXPress 却只认真实点击，按 App 学一次并记住：
-        //   "ax"    辅助功能就够（菜单类、只显示窗口的 App）
-        //   "click" 必须真实点击（光标会闪一下）
-        let bundleID = context.pid.flatMap { NSRunningApplication(processIdentifier: $0)?.bundleIdentifier }
-        let learned = bundleID.flatMap { activationLedger[$0] }
-        var pressed = false
-        var newWindowSeen = false
-        func newWindows() -> Bool {
-            guard let pid = context.pid else { return false }
-            return MenuBarScanner.onScreenWindows(ownedBy: pid).contains { before[$0.key] == nil }
-        }
-        if !rightButton, learned != "click", ProcessInfo.processInfo.environment["COFFEEBAR_NO_AXPRESS"] == nil {
-            let pid = context.pid
-            let startBounds = MenuBarScanner.bounds(of: item.windowID) ?? item.bounds
-            func reacted() -> Bool {
-                if newWindows() { return true }
-                if let now = MenuBarScanner.bounds(of: item.windowID), abs(now.width - startBounds.width) > 1 || !MenuBarScanner.isOnScreen(now) { return true }
-                return false
-            }
-            var live = item
-            live.bounds = startBounds
-            // 图标刚挪进来，App 自己的坐标要过一会儿才更新；每 30 毫秒试一次，坐标一就绪立即按。
+        var reaction: ClickReactionVerifier.Reaction = .unobserved
+        var activated = false
+
+        if !rightButton, ProcessInfo.processInfo.environment["COFFEEBAR_NO_AXPRESS"] == nil {
+            let snapshot = ClickReactionVerifier.snapshot(item: item, pids: pids)
+            func reacted() -> Bool { ClickReactionVerifier.reactionSoFar(against: snapshot)?.didReact == true }
             let t0 = Date()
             if let ms = UInt64(ProcessInfo.processInfo.environment["COFFEEBAR_AX_DELAY_MS"] ?? "") { try? await Task.sleep(nanoseconds: ms * 1_000_000) }
+            let electron = pid.map { AccessibilityIndex.isElectron(pid: $0) } ?? false
+            var live = item
+            // 图标刚挪进来，App 自己的坐标要过一会儿才更新；每 30 毫秒试一次，坐标一就绪立即按。
             for attempt in 0..<10 {
                 live.bounds = MenuBarScanner.bounds(of: item.windowID) ?? live.bounds
-                pressed = AccessibilityIndex.activate(item: live, extra: extra, reacted: reacted)
-                if pressed || reacted() { break }
+                if electron, let pid {
+                    activated = AccessibilityIndex.pressViaExtrasMenuBar(pid: pid, itemBounds: live.bounds)
+                } else {
+                    activated = AccessibilityIndex.activate(item: live, extra: extra, reacted: reacted)
+                }
+                if activated || reacted() { activated = true; break }
                 if attempt < 9 { try? await Task.sleep(nanoseconds: 30_000_000) }
             }
-            NSLog("CoffeeBar: AX activation attempt loop took \(Int(Date().timeIntervalSince(t0) * 1000)) ms, accepted=\(pressed)")
-            if pressed || reacted() {
-                pressed = true
-                if learned == "ax" {
-                    // 已知辅助功能足够，不用再观察。
-                } else {
-                    // 还没学过：给它最多 600 毫秒看有没有弹出新窗口。
-                    for _ in 0..<30 {
-                        if newWindows() { newWindowSeen = true; break }
-                        try? await Task.sleep(nanoseconds: 20_000_000)
-                    }
-                    if !newWindowSeen {
-                        // 没弹窗：可能是只认真实点击的 App，也可能是只显示窗口的 App。补一次点击来分辨。
-                        pressed = false
-                        _ = pid
-                    }
+            NSLog("CoffeeBar: AX activation of \(item.ownerName) took \(Int(Date().timeIntervalSince(t0) * 1000)) ms, activated=\(activated), electron=\(electron)")
+            if activated {
+                reaction = await ClickReactionVerifier.verify(against: snapshot)
+                if !reaction.didReact {
+                    NSLog("CoffeeBar: \(item.ownerName) accepted the accessibility action but was not seen reacting; leaving it alone")
                 }
             }
         }
-        if !pressed {
-            // 退回鼠标点击：这时才需要等 App 自己的坐标也回到屏幕上，否则点击会穿到下面的窗口。
+
+        if !activated {
+            // 合成点击：这时才需要等 App 自己的坐标也回到屏幕上，否则点击会穿到下面的窗口。
             if let extra, let axFrame = await AccessibilityIndex.waitUntilOnScreen(extra) {
                 target = axFrame
             } else {
                 try? await Task.sleep(nanoseconds: 300_000_000)
                 target = MenuBarScanner.bounds(of: item.windowID) ?? target
             }
+            let snapshot = ClickReactionVerifier.snapshot(item: item, pids: pids)
             NSLog("CoffeeBar: click \(item.ownerName) at \(target)")
-            let beforeClick = context.pid.map { MenuBarScanner.onScreenWindows(ownedBy: $0) } ?? [:]
             ClickForwarder.click(at: CGPoint(x: target.midX, y: target.midY), rightButton: rightButton,
-                                 windowID: item.windowID, ownerPID: item.ownerPID, targetPID: extra?.pid)
-            if !rightButton, let bundleID, learned == nil {
-                // 学习：点击弹出了新窗口 => 这个 App 必须真实点击；没弹 => 辅助功能就够。
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                let clickOpened = context.pid.map { MenuBarScanner.onScreenWindows(ownedBy: $0).contains { beforeClick[$0.key] == nil } } ?? false
-                activationLedger[bundleID] = clickOpened ? "click" : "ax"
-                NSLog("CoffeeBar: learned \(bundleID) -> \(activationLedger[bundleID]!)")
-            }
-        } else if let bundleID, learned == nil, newWindowSeen {
-            activationLedger[bundleID] = "ax"
-            NSLog("CoffeeBar: learned \(bundleID) -> ax")
+                                 windowID: item.windowID, ownerPID: item.ownerPID, targetPID: pid)
+            reaction = await ClickReactionVerifier.verify(against: snapshot)
         }
 
-        guard let pid = context.pid, let targetApp = NSRunningApplication(processIdentifier: pid) else {
+        guard let pid, let targetApp = NSRunningApplication(processIdentifier: pid) else {
             if rehide { scheduleRehide(after: 1) }
             return
         }
-        try? await Task.sleep(nanoseconds: 400_000_000)
-        let after = MenuBarScanner.onScreenWindows(ownedBy: pid)
-        let newWindows = after.filter { before[$0.key] == nil }
+        // 记下点击打开的界面窗口（菜单、弹窗或普通窗口），它还在就不收回。
+        // 反应检测已经看到的直接用；没看到的再等一会儿扫一次，有些 App 开窗口慢。
+        var interfaceWindow = reaction.openedWindowID
+        if interfaceWindow == nil {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            interfaceWindow = MenuBarScanner.onScreenWindows(ownedBy: pid).first { before[$0.key] == nil }?.key
+        }
         if let index = tempShown.firstIndex(where: { $0.item.windowID == item.windowID }) {
-            tempShown[index].interfaceWindow = newWindows.keys.first
+            tempShown[index].interfaceWindow = interfaceWindow
         }
         // macOS 14 起 App 只有在收到真实用户输入后才能激活自己，合成点击不算：
         // 没弹出任何菜单 / 弹窗的（只显示窗口的那种 App），替它激活到前台。
-        let poppedUp = newWindows.contains { $0.value > 0 }
-        if !poppedUp, !targetApp.isActive {
+        if interfaceWindow == nil, !targetApp.isActive {
             NSLog("CoffeeBar: no popup from \(item.ownerName), activating it")
             targetApp.activate()
         }
@@ -537,6 +510,15 @@ final class MenuBarController: NSObject {
         }
     }
 
+    /// 用户最近 `seconds` 秒内没动鼠标、没滚动、没按键、没按住修饰键。
+    private static func hasUserPausedInput(for seconds: TimeInterval) -> Bool {
+        let modifiers = NSEvent.modifierFlags.intersection([.command, .option, .shift, .control])
+        guard modifiers.isEmpty, NSEvent.pressedMouseButtons == 0 else { return false }
+        let state = CGEventSourceStateID.combinedSessionState
+        return CGEventSource.secondsSinceLastEventType(state, eventType: .mouseMoved) > seconds
+            && CGEventSource.secondsSinceLastEventType(state, eventType: .scrollWheel) > seconds
+    }
+
     /// 目标 App 的界面还开着、或者鼠标还按着，就过会儿再看；否则把图标挪回去。
     private func rehideTempShownIfIdle() async {
         guard !tempShown.isEmpty else { return }
@@ -547,6 +529,12 @@ final class MenuBarController: NSObject {
         }
         if mouseDown || showingInterface || NSEvent.modifierFlags.contains(.command) {
             scheduleRehide(after: 1)
+            return
+        }
+        // Thaw 的 hasUserPausedInput：挪回去期间光标是藏起来的，最后还要 warp 回记下的位置。
+        // 用户正在动鼠标 / 滚动 / 按着修饰键时这么做，光标会被拽回几百毫秒前的位置，等停手再收。
+        if !Self.hasUserPausedInput(for: 0.25) {
+            scheduleRehide(after: 0.5)
             return
         }
         while let context = tempShown.popLast() {

@@ -83,6 +83,26 @@ enum MenuBarScanner {
         return result
     }
 
+    /// 屏幕上所有窗口及其所属进程。
+    static func onScreenWindowOwners() -> [CGWindowID: pid_t] {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else { return [:] }
+        var result: [CGWindowID: pid_t] = [:]
+        for info in list {
+            guard let owner = info[kCGWindowOwnerPID as String] as? pid_t,
+                  let number = info[kCGWindowNumber as String] as? Int
+            else { continue }
+            result[CGWindowID(number)] = owner
+        }
+        return result
+    }
+
+    static func windowLayer(of windowID: CGWindowID) -> Int? {
+        guard let list = CGWindowListCopyWindowInfo(.optionIncludingWindow, windowID) as? [[String: Any]],
+              let info = list.first
+        else { return nil }
+        return info[kCGWindowLayer as String] as? Int
+    }
+
     static func bounds(of windowID: CGWindowID) -> CGRect? {
         // optionIncludingWindow 只对在屏幕上的窗口有效；屏幕外的要翻全量列表。
         if let list = CGWindowListCopyWindowInfo(.optionIncludingWindow, windowID) as? [[String: Any]],

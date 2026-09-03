@@ -56,8 +56,53 @@ enum AccessibilityIndex {
             .min { $0.1 < $1.1 }?.0
     }
 
-    /// 通过辅助功能激活一个已经在屏幕上的图标，完全不碰鼠标（Thaw 的做法）。
-    /// 1. 先用系统级坐标命中测试拿元素，拿不到再用索引里的元素；校验它的 AX 坐标和窗口位置吻合。
+    /// 某个 App 的 AXExtrasMenuBar 下的子元素（它的菜单栏图标们）。
+    private static func extrasChildren(pid: pid_t) -> [AXUIElement] {
+        let axApp = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(axApp, 0.25)
+        var extras: AnyObject?
+        guard AXUIElementCopyAttributeValue(axApp, "AXExtrasMenuBar" as CFString, &extras) == .success, let bar = extras else { return [] }
+        var children: AnyObject?
+        guard AXUIElementCopyAttributeValue(bar as! AXUIElement, kAXChildrenAttribute as CFString, &children) == .success,
+              let elements = children as? [AXUIElement]
+        else { return [] }
+        return elements
+    }
+
+    /// 是不是 Electron 应用（照 Thaw 的 isElectronItem：看包里有没有 Electron Framework）。
+    /// 这类 App 的托盘图标不认合成点击，只能走辅助功能 AXPress。
+    static func isElectron(pid: pid_t) -> Bool {
+        guard let url = NSRunningApplication(processIdentifier: pid)?.bundleURL else { return false }
+        let framework = url.appendingPathComponent("Contents/Frameworks/Electron Framework.framework")
+        return FileManager.default.fileExists(atPath: framework.path)
+    }
+
+    /// 照 Thaw 的 pressItemViaAccessibility：在 App 自己的 AXExtrasMenuBar 里找到和窗口位置对得上的那个子元素 AXPress。
+    /// 只有一个子元素时不用比对；多个时取中心距离最近且不超过 10 点的。找不到或按不动返回 false，让调用方退回合成点击。
+    static func pressViaExtrasMenuBar(pid: pid_t, itemBounds: CGRect) -> Bool {
+        let children = extrasChildren(pid: pid)
+        guard !children.isEmpty else { return false }
+        let target: AXUIElement
+        if children.count == 1 {
+            target = children[0]
+        } else {
+            let center = CGPoint(x: itemBounds.midX, y: itemBounds.midY)
+            func distance(_ element: AXUIElement) -> CGFloat {
+                guard let frame = frame(of: element) else { return .greatestFiniteMagnitude }
+                return hypot(frame.midX - center.x, frame.midY - center.y)
+            }
+            guard let best = children.min(by: { distance($0) < distance($1) }), distance(best) <= 10 else { return false }
+            target = best
+        }
+        AXUIElementSetMessagingTimeout(target, 0.25)
+        let result = AXUIElementPerformAction(target, kAXPressAction as CFString)
+        if result != .success { NSLog("CoffeeBar: AXPress via extras menu bar (pid \(pid)) failed: \(result.rawValue)") }
+        return result == .success
+    }
+
+    /// 通过辅助功能激活一个已经在屏幕上的图标，完全不碰鼠标（Thaw 的 AXItemActivator）。
+    /// 1. 先用系统级坐标命中测试拿元素；拿不到就到 App 自己的 AXExtrasMenuBar 里找包含该点的子元素，
+    ///    再不行用索引里的元素。最后校验它的 AX 坐标和窗口位置吻合。
     /// 2. 先 AXShowMenu 再 AXPress。动作超时不等于失败：菜单一打开 App 就进入模态跟踪循环，
     ///    答不了辅助功能消息，恰恰是成功的那次会超时。所以每步之后看图标有没有反应，有就停，
     ///    否则再按一次会把刚打开的菜单关掉。
@@ -69,8 +114,8 @@ enum AccessibilityIndex {
         var hit: AXUIElement?
         if AXUIElementCopyElementAtPosition(systemWide, Float(center.x), Float(center.y), &hit) == .success, let hit {
             element = hit
-        } else {
-            element = extra?.element
+        } else if let extra {
+            element = extrasChildren(pid: extra.pid).first { frame(of: $0)?.contains(center) == true } ?? extra.element
         }
         guard let element else { return false }
         AXUIElementSetMessagingTimeout(element, 0.25)

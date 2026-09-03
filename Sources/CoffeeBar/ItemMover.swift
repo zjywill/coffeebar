@@ -4,7 +4,7 @@ import AppKit
 ///
 /// - 按下和抬起用同一个点：目标落点。事件里写入窗口 ID 字段，窗口服务器据此把按下路由到要挪的图标，
 ///   把抬起路由到目标图标，不看鼠标实际在哪。拖拽中的图标就停在落点上，不会在别处冒出幽灵。
-/// - 落点在屏幕内时先把光标 warp 过去、藏起来、等 20 毫秒再发事件；落点在屏幕外（隐藏区）时只藏光标。
+/// - 先藏光标；落点在屏幕内时再把光标 warp 过去、等 20 毫秒再发事件；落点在屏幕外（隐藏区）时不 warp。
 ///   完成后把光标挪回原位再显示。
 enum ItemMover {
     private static let windowIDField = CGEventField(rawValue: 0x33)!
@@ -61,8 +61,10 @@ enum ItemMover {
 
         let t0 = Date()
         let cursor = CGEvent(source: nil)?.location ?? .zero
-        if pointOnScreen { CGWarpMouseCursorPosition(point) }
+        // 先藏再 warp（Thaw 的 move() 在进入 postMoveEvents 之前就把光标藏了）。
+        // 反过来先 warp 再藏，光标会在落点（菜单栏顶边）露出一帧，看起来就是"往上跳一下"。
         CGDisplayHideCursor(CGMainDisplayID())
+        if pointOnScreen { CGWarpMouseCursorPosition(point) }
         defer {
             CGWarpMouseCursorPosition(cursor)
             CGAssociateMouseAndMouseCursorPosition(1) // 解除 warp 之后系统对物理鼠标移动的短暂压制
