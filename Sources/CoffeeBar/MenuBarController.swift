@@ -4,26 +4,27 @@ import AppKit
 /// 菜单栏图标从右往左排。我们放一个"分隔符" NSStatusItem，
 /// 把它的宽度拉到极大，分隔符左侧的所有图标就被挤出屏幕，等于"隐藏"。
 ///
-/// 访问隐藏图标有两种方式：
-/// 1. 左键点 `<`：在菜单栏下方弹一个面板，显示隐藏图标的截图，点它就转发给真图标（默认）。
-/// 2. ⌥ + 左键点 `<`：把分隔符缩回去，图标直接在菜单栏里展开（屏幕够宽时可用）。
+/// 三种状态：
+/// - 隐藏（默认）：分隔符撑满，图标在屏幕外。
+/// - 临时展开：点了面板里的图标后，把真图标移回菜单栏点一下；用户在菜单栏外松开鼠标就自动收回。
+/// - 整理模式：用户主动展开，用来 ⌘ 拖动排布图标；不会自动收回，再点一次 `<` 才收。
 @MainActor
 final class MenuBarController: NSObject {
     private static let hiddenLength: CGFloat = 10_000
     private static let shownLength: CGFloat = 12
+
+    private enum InlineState { case hidden, temporary, arranging }
 
     private let toggleItem: NSStatusItem
     private let separatorItem: NSStatusItem
     private let panel = DropPanel()
     private let updater = UpdateController()
 
-    private var isInlineShown = false
-    /// 上次打开面板时扫到的辅助功能索引，点击兜底时用。
-    private var axExtras: [AXMenuExtra] = []
-    /// 图标截图缓存，按窗口 ID。
-    private var imageCache: [CGWindowID: NSImage] = [:]
+    private var inlineState: InlineState = .hidden
     private var mouseUpMonitor: Any?
     private var rehideTimer: Timer?
+    /// 上次打开面板时扫到的辅助功能索引，点击兜底时用。
+    private var axExtras: [AXMenuExtra] = []
 
     override init() {
         // 首次启动时把两个图标放在菜单栏最右侧并相邻，这样默认就把所有第三方图标藏起来。
@@ -75,12 +76,13 @@ final class MenuBarController: NSObject {
             panel.dismiss()
             return
         }
-        if isInlineShown {
-            hideInline()
+        // 展开状态下（不管哪种）点 `<` 都是收回。
+        if inlineState != .hidden {
+            setInline(.hidden)
             return
         }
         if event?.modifierFlags.contains(.option) == true {
-            showInline()
+            setInline(.arranging)
         } else {
             openPanel()
         }
@@ -91,120 +93,92 @@ final class MenuBarController: NSObject {
     private func openPanel() {
         guard let anchor = toggleItem.button?.window?.frame else { return }
 
-        if !Permissions.hasScreenRecording {
-            Permissions.requestScreenRecording()
+        if !Permissions.hasAccessibility {
+            Permissions.requestAccessibility()
             panel.showItems([], notice: (
-                "需要「屏幕录制」权限来预览隐藏的图标。授权后 CoffeeBar 会自动重启。\n（或者按住 ⌥ 点击 “<” 直接在菜单栏里展开）",
-                [("打开系统设置", Permissions.openScreenRecordingSettings), ("重启 CoffeeBar", Permissions.relaunch)]
+                "需要「辅助功能」权限来识别和点击隐藏的图标。授权后再点一次 “<” 即可。",
+                [("打开系统设置", Permissions.openAccessibilitySettings)]
             ), anchor: anchor)
-            watchForScreenRecordingGrant()
             return
         }
 
         var items = MenuBarScanner.hiddenItems()
-        let notice: (String, [DropPanel.NoticeButton])? = Permissions.hasAccessibility ? nil : (
-            "需要「辅助功能」权限才能点击面板里的图标。", [("打开系统设置", Permissions.openAccessibilitySettings)]
-        )
-
         Task {
             // 辅助功能扫描要跨进程问一圈，放后台线程。
             axExtras = await Task.detached { AccessibilityIndex.scan() }.value
             for i in items.indices {
                 if let extra = AccessibilityIndex.match(items[i].bounds, in: axExtras) {
                     items[i].ownerName = extra.appName
+                    items[i].icon = extra.icon
                 }
             }
-
-            // macOS 26 上屏幕外的窗口截不到图（SCK 报 -3811），
-            // 只能把图标展开一瞬间，截完马上收回。展不下的图标沿用上次缓存或用名字占位。
-            separatorItem.length = Self.shownLength
-            if let nearest = items.last {
-                _ = await ClickForwarder.waitUntilOnScreen(nearest.windowID)
-            }
-            try? await Task.sleep(nanoseconds: 60_000_000)
-            let fresh = await ItemCapturer.capture(items.filter { MenuBarScanner.bounds(of: $0.windowID).map(MenuBarScanner.isOnScreen) ?? false })
-            if !isInlineShown {
-                separatorItem.length = Self.hiddenLength
-            }
-            imageCache.merge(fresh) { $1 }
-
-            let entries = items.map { ($0, imageCache[$0.windowID]) }
-            panel.showItems(entries, notice: notice, anchor: anchor)
-        }
-    }
-
-    private var grantWatcher: Timer?
-
-    /// 用户在系统设置里打开屏幕录制后，这个进程里的 ScreenCaptureKit 仍然不可用，只能重启。
-    private func watchForScreenRecordingGrant() {
-        grantWatcher?.invalidate()
-        grantWatcher = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { timer in
-            if Permissions.hasScreenRecording {
-                timer.invalidate()
-                Permissions.relaunch()
-            }
+            panel.showItems(items.map { ($0, $0.icon) }, notice: nil, anchor: anchor)
         }
     }
 
     /// 点了面板里的图标：把真图标临时移回菜单栏，在它上面合成一次点击。
+    /// 直接对屏幕外的图标用辅助功能 AXPress 虽然返回成功，但菜单不会显示，所以必须先展开。
     private func activate(_ item: MenuBarItem, rightButton: Bool) {
         panel.dismiss()
         if !Permissions.hasAccessibility {
             Permissions.requestAccessibility()
             return
         }
-        showInline()
+        setInline(.temporary)
         Task {
             if let rect = await ClickForwarder.waitUntilOnScreen(item.windowID) {
-                NSLog("CoffeeBar: forwarding click to \(item.ownerName) at \(rect)")
                 ClickForwarder.click(at: CGPoint(x: rect.midX, y: rect.midY), rightButton: rightButton)
-            } else {
-                NSLog("CoffeeBar: \(item.ownerName) never came on screen, AX press fallback")
-                // 展开了也挤不进屏幕（屏幕太窄或被刘海占了），直接按它。
-                if let extra = AccessibilityIndex.match(item.bounds, in: axExtras) {
-                    _ = AccessibilityIndex.press(extra)
-                }
+            } else if let extra = AccessibilityIndex.match(item.bounds, in: axExtras) {
+                // 展开了也挤不进屏幕（屏幕太窄或被刘海占了），只能直接按它。
+                _ = AccessibilityIndex.press(extra)
             }
         }
     }
 
     // MARK: - 菜单栏内展开
 
-    private func showInline() {
-        isInlineShown = true
-        applyInlineState()
-    }
-
-    private func hideInline() {
-        isInlineShown = false
+    private func setInline(_ state: InlineState) {
+        inlineState = state
         applyInlineState()
     }
 
     private func applyInlineState() {
-        separatorItem.length = isInlineShown ? Self.shownLength : Self.hiddenLength
-        toggleItem.button?.image = NSImage(
-            systemSymbolName: isInlineShown ? "chevron.right" : "chevron.left",
-            accessibilityDescription: nil
-        )
-        if isInlineShown {
+        separatorItem.length = inlineState == .hidden ? Self.hiddenLength : Self.shownLength
+        let symbol: String
+        switch inlineState {
+        case .hidden: symbol = "chevron.left"
+        case .temporary: symbol = "chevron.right"
+        case .arranging: symbol = "checkmark"
+        }
+        toggleItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        toggleItem.button?.toolTip = inlineState == .arranging ? "整理中：⌘ 拖动图标或 “/”，完成后点这里收回" : nil
+
+        if inlineState == .temporary {
             startRehideWatchers()
         } else {
             stopRehideWatchers()
         }
     }
 
-    /// 展开状态下，在菜单栏以外松开鼠标（比如选了某个菜单项），或者 20 秒无操作，就自动收回。
-    /// 用 mouseUp 而不是 mouseDown，是为了等对方菜单项的动作先触发。
+    /// 临时展开时，在菜单栏以外松开鼠标（比如选了某个菜单项），或者 20 秒无操作，就自动收回。
+    /// 用 mouseUp 而不是 mouseDown，是为了等对方菜单项的动作先触发。按着 ⌘ 时不收，用户可能在拖图标。
     private func startRehideWatchers() {
         stopRehideWatchers()
         mouseUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp, .rightMouseUp]) { [weak self] event in
             guard let self else { return }
+            if event.modifierFlags.contains(.command) { return }
             if !Self.isInMenuBar(event.locationInWindow) {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.hideInline() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    if self.inlineState == .temporary { self.setInline(.hidden) }
+                }
             }
         }
         rehideTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: false) { [weak self] _ in
-            Task { @MainActor in self?.hideInline() }
+            Task { @MainActor in
+                guard let self, self.inlineState == .temporary else { return }
+                if NSEvent.modifierFlags.contains(.command) { return }
+                self.setInline(.hidden)
+            }
         }
     }
 
@@ -229,14 +203,21 @@ final class MenuBarController: NSObject {
 
     // MARK: - 右键菜单
 
+    @objc private func startArranging() {
+        setInline(.arranging)
+    }
+
     @objc private func checkForUpdates() {
         updater.checkForUpdates()
     }
 
     private func showContextMenu() {
         let menu = NSMenu()
-        menu.addItem(withTitle: "“/” 左边的图标会被隐藏，按住 ⌘ 拖动图标或 “/” 调整", action: nil, keyEquivalent: "")
-        menu.addItem(withTitle: "左键：弹出面板    ⌥+左键：在菜单栏内展开", action: nil, keyEquivalent: "")
+        let arrange = NSMenuItem(title: inlineState == .arranging ? "完成整理" : "整理图标…", action: nil, keyEquivalent: "")
+        arrange.target = self
+        arrange.action = inlineState == .arranging ? #selector(finishArranging) : #selector(startArranging)
+        menu.addItem(arrange)
+        menu.addItem(withTitle: "整理时 “/” 左边的图标会被隐藏，按住 ⌘ 拖动图标或 “/” 调整", action: nil, keyEquivalent: "")
         menu.addItem(.separator())
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
         menu.addItem(withTitle: "CoffeeBar \(version)", action: nil, keyEquivalent: "")
@@ -249,5 +230,9 @@ final class MenuBarController: NSObject {
         toggleItem.menu = menu
         toggleItem.button?.performClick(nil)
         toggleItem.menu = nil
+    }
+
+    @objc private func finishArranging() {
+        setInline(.hidden)
     }
 }

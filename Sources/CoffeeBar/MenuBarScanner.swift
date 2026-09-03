@@ -10,6 +10,7 @@ struct MenuBarItem: Identifiable, Hashable {
     /// macOS 26 上永远是 Control Center，没什么用；面板显示的名字来自 AccessibilityIndex。
     let ownerPID: pid_t
     var ownerName: String
+    var icon: NSImage?
     /// CG 坐标系（原点左上），单位是 point。
     var bounds: CGRect
 

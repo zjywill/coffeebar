@@ -1,6 +1,6 @@
 import AppKit
 
-/// 面板里的一个图标：有截图就显示截图，没有就显示 App 名字。左键 / 右键都转发。
+/// 面板里的一个图标：显示所属 App 的图标，认不出 App 时显示名字。左键 / 右键都转发。
 final class ItemView: NSView {
     let item: MenuBarItem
     private let image: NSImage?
@@ -14,20 +14,23 @@ final class ItemView: NSView {
 
     let itemWidth: CGFloat
 
+    private static let iconSize: CGFloat = 20
+    private static let cellHeight: CGFloat = 30
+
     init(item: MenuBarItem, image: NSImage?) {
         self.item = item
         self.image = image
         if image != nil {
-            itemWidth = item.bounds.width
+            itemWidth = Self.cellHeight + 4
         } else {
             let textWidth = (item.ownerName as NSString).size(withAttributes: Self.labelAttributes).width
             itemWidth = ceil(textWidth) + 16
         }
-        super.init(frame: NSRect(x: 0, y: 0, width: itemWidth, height: item.bounds.height))
+        super.init(frame: NSRect(x: 0, y: 0, width: itemWidth, height: Self.cellHeight))
         toolTip = item.ownerName
         translatesAutoresizingMaskIntoConstraints = false
         widthAnchor.constraint(equalToConstant: itemWidth).isActive = true
-        heightAnchor.constraint(equalToConstant: item.bounds.height).isActive = true
+        heightAnchor.constraint(equalToConstant: Self.cellHeight).isActive = true
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -51,7 +54,9 @@ final class ItemView: NSView {
             NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
         }
         if let image {
-            image.draw(in: bounds)
+            let side = Self.iconSize
+            let rect = NSRect(x: (bounds.width - side) / 2, y: (bounds.height - side) / 2, width: side, height: side)
+            image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
         } else {
             let text = item.ownerName as NSString
             let size = text.size(withAttributes: Self.labelAttributes)
@@ -95,7 +100,7 @@ final class DropPanel: NSPanel {
         }
 
         if entries.isEmpty, notice == nil {
-            column.addArrangedSubview(makeLabel("没有隐藏的图标。按住 ⌘ 把图标拖到 “/” 左边即可隐藏。"))
+            column.addArrangedSubview(makeLabel("没有隐藏的图标。右键 “<” 选「整理图标…」，把要藏的拖到 “/” 左边。"))
         }
 
         // 简单的流式布局：一行放不下就换行。

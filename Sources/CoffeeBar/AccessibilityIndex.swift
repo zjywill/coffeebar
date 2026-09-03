@@ -9,6 +9,8 @@ struct AXMenuExtra {
     let appName: String
     let pid: pid_t
     let frame: CGRect
+    /// App 图标，面板里用它代替图标截图（截图要屏幕录制权限，而且屏幕外的窗口截不到）。
+    let icon: NSImage?
 }
 
 enum AccessibilityIndex {
@@ -32,7 +34,7 @@ enum AccessibilityIndex {
             let name = app.localizedName ?? "pid \(app.processIdentifier)"
             for element in elements {
                 guard let frame = frame(of: element) else { continue }
-                result.append(AXMenuExtra(element: element, appName: name, pid: app.processIdentifier, frame: frame))
+                result.append(AXMenuExtra(element: element, appName: name, pid: app.processIdentifier, frame: frame, icon: app.icon))
             }
         }
         return result
