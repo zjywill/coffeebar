@@ -1,9 +1,16 @@
 import AppKit
 
-/// 用合成的 ⌘ 拖拽把单个菜单栏图标挪到别的位置（Ice 的做法）。
+/// 用合成的 ⌘ 拖拽把单个菜单栏图标挪到别的位置（Ice / Thaw 的做法）。
 ///
-/// 关键在于事件里写入目标窗口 ID 的几个字段：窗口服务器据此把事件路由到图标窗口，
-/// 而不看鼠标实际在哪。这样可以把一个在屏幕外的图标"拖"到可见区，而不必展开其它图标。
+/// 事件里写入目标窗口 ID 的几个字段：窗口服务器据此把事件路由到图标窗口，而不看鼠标实际在哪。
+///
+/// 光标处理（实测 macOS 26）：
+/// - 鼠标事件带的坐标会把光标带过去，投递给进程、脱钩鼠标都拦不住。
+/// - 按下事件的坐标放在当前光标处即可，光标不动；落点由抬起事件决定。
+/// - 目标在屏幕内时，抬起事件的坐标也放在当前光标处，靠窗口字段定位，光标全程不动。
+///   落在目标的哪一侧由光标 x 和目标中心比较决定。
+/// - 目标在屏幕外（隐藏区）时，抬起事件必须带屏幕外坐标，光标会被夹到屏幕边缘；
+///   只在抬起前后几十毫秒藏起光标并挪回，肉眼基本看不到。
 enum ItemMover {
     private static let windowIDField = CGEventField(rawValue: 0x33)!
 
@@ -38,10 +45,14 @@ enum ItemMover {
             return nil
         }
 
-        let start = CGPoint(x: 20_000, y: 20_000)
-        let end = CGPoint(x: (rightSide ? targetFrame.maxX : targetFrame.minX) + xOffset, y: targetFrame.midY)
-        guard let down = event(.leftMouseDown, at: start, windowID: windowID, pid: ownerPID, flags: .maskCommand, source: source),
-              let up = event(.leftMouseUp, at: end, windowID: targetWindowID, pid: ownerPID, flags: [], source: source)
+        let cursor = CGEvent(source: nil)?.location ?? .zero
+        let dropPoint = CGPoint(x: (rightSide ? targetFrame.maxX : targetFrame.minX) + xOffset, y: targetFrame.midY)
+        // 目标在屏幕内且光标已在目标的正确一侧：抬起也放在光标处，光标全程不动。
+        let cursorOnWantedSide = rightSide ? cursor.x > targetFrame.midX : cursor.x < targetFrame.midX
+        let stayPut = MenuBarScanner.isOnScreen(targetFrame) && cursorOnWantedSide
+
+        guard let down = event(.leftMouseDown, at: cursor, windowID: windowID, pid: ownerPID, flags: .maskCommand, source: source),
+              let up = event(.leftMouseUp, at: stayPut ? cursor : dropPoint, windowID: targetWindowID, pid: ownerPID, flags: [], source: source)
         else { return nil }
 
         // 合成事件期间不要让系统压制本地鼠标事件。
@@ -50,19 +61,18 @@ enum ItemMover {
         }
         source.localEventsSuppressionInterval = 0
 
-        // 拖拽会把光标扯走，先藏起来，完事再放回原处。
-        let cursor = CGEvent(source: nil)?.location ?? .zero
-        CGDisplayHideCursor(CGMainDisplayID())
-        defer {
-            CGWarpMouseCursorPosition(cursor)
-            CGDisplayShowCursor(CGMainDisplayID())
-        }
-
         down.post(tap: .cgSessionEventTap)
         let afterDown = await waitForFrameChange(of: windowID, from: itemFrame, timeout: 0.3)
+
+        if !stayPut { CGDisplayHideCursor(CGMainDisplayID()) }
         up.post(tap: .cgSessionEventTap)
         let afterUp = await waitForFrameChange(of: windowID, from: afterDown ?? itemFrame, timeout: 0.5)
-        NSLog("CoffeeBar: move \(windowID): \(itemFrame) -> down \(String(describing: afterDown)) -> up \(String(describing: afterUp))")
+        if !stayPut {
+            CGWarpMouseCursorPosition(cursor)
+            CGAssociateMouseAndMouseCursorPosition(1) // 解除 warp 之后系统对物理鼠标移动的短暂压制，否则会有"鼠标卡一下"的感觉
+            CGDisplayShowCursor(CGMainDisplayID())
+        }
+        NSLog("CoffeeBar: move \(windowID) \(stayPut ? "(cursor untouched)" : "(cursor hidden at drop)"): \(itemFrame) -> \(String(describing: afterUp ?? afterDown))")
         return afterUp ?? afterDown
     }
 }

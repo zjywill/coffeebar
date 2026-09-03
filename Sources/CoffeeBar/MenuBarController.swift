@@ -252,10 +252,12 @@ final class MenuBarController: NSObject {
         else { NSLog("CoffeeBar: no hidden item for \(name) or no toggle window"); return }
         let item = items[index]
         let rightNeighbor = index + 1 < items.count ? items[index + 1] : nil
+        let leftNeighbor = index > 0 ? items[index - 1] : nil
         Task {
             let shown = await ItemMover.move(windowID: item.windowID, ownerPID: item.ownerPID, toLeftOf: toggleWindowID)
             NSLog("CoffeeBar: temp show \(name) -> \(String(describing: shown))")
             try? await Task.sleep(nanoseconds: 2_000_000_000)
+            _ = leftNeighbor
             if let rightNeighbor {
                 let back = await ItemMover.move(windowID: item.windowID, ownerPID: item.ownerPID, toLeftOf: rightNeighbor.windowID)
                 NSLog("CoffeeBar: moved back -> \(String(describing: back))")

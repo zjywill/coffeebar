@@ -84,7 +84,8 @@ enum ClickForwarder {
         }
         guard restore else { return }
         usleep(restoreMode == "delayed" ? 400_000 : 30_000)
-        if useWarp { CGWarpMouseCursorPosition(cursor) }
+        if useWarp { CGWarpMouseCursorPosition(cursor)
+            CGAssociateMouseAndMouseCursorPosition(1) // 解除 warp 之后系统对物理鼠标移动的短暂压制，否则会有"鼠标卡一下"的感觉 }
         if useHide { CGDisplayShowCursor(CGMainDisplayID()) }
     }
 }
