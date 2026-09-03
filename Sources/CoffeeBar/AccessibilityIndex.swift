@@ -56,6 +56,37 @@ enum AccessibilityIndex {
             .min { $0.1 < $1.1 }?.0
     }
 
+    /// 通过辅助功能激活一个已经在屏幕上的图标，完全不碰鼠标（Thaw 的做法）。
+    /// 1. 先用系统级坐标命中测试拿元素，拿不到再用索引里的元素；校验它的 AX 坐标和窗口位置吻合。
+    /// 2. 先 AXShowMenu 再 AXPress。动作超时不等于失败：菜单一打开 App 就进入模态跟踪循环，
+    ///    答不了辅助功能消息，恰恰是成功的那次会超时。所以每步之后看图标有没有反应，有就停，
+    ///    否则再按一次会把刚打开的菜单关掉。
+    static func activate(item: MenuBarItem, extra: AXMenuExtra?, reacted: () -> Bool) -> Bool {
+        let center = CGPoint(x: item.bounds.midX, y: item.bounds.midY)
+        var element: AXUIElement?
+        let systemWide = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(systemWide, 0.25)
+        var hit: AXUIElement?
+        if AXUIElementCopyElementAtPosition(systemWide, Float(center.x), Float(center.y), &hit) == .success, let hit {
+            element = hit
+        } else {
+            element = extra?.element
+        }
+        guard let element else { return false }
+        AXUIElementSetMessagingTimeout(element, 0.25)
+        guard let frame = frame(of: element), frame.insetBy(dx: -10, dy: -10).intersects(item.bounds) else {
+            NSLog("CoffeeBar: AX element frame mismatch for \(item.ownerName)")
+            return false
+        }
+        for action in [kAXShowMenuAction, kAXPressAction] {
+            let result = AXUIElementPerformAction(element, action as CFString)
+            if result == .success { NSLog("CoffeeBar: \(action) accepted by \(item.ownerName)"); return true }
+            if reacted() { NSLog("CoffeeBar: \(action) timed out but \(item.ownerName) reacted"); return true }
+            NSLog("CoffeeBar: \(action) on \(item.ownerName) failed: \(result.rawValue)")
+        }
+        return false
+    }
+
     static func press(_ extra: AXMenuExtra) -> Bool {
         // 有些 App 按下后要等菜单关闭才返回，别让它卡住我们：超时就当失败，走鼠标点击兜底。
         AXUIElementSetMessagingTimeout(extra.element, 0.3)

@@ -320,17 +320,30 @@ final class MenuBarController: NSObject {
         try? await Task.sleep(nanoseconds: 50_000_000)
 
         let before = context.pid.map { MenuBarScanner.onScreenWindows(ownedBy: $0) } ?? [:]
-        // 左键优先走辅助功能 AXPress：完全不碰鼠标。不支持的 App 再合成鼠标点击（光标会闪一下）。
+        // 左键优先走辅助功能：完全不碰鼠标。不支持的 App 再合成鼠标点击。
         var pressed = false
-        if !rightButton, let extra, ProcessInfo.processInfo.environment["COFFEEBAR_NO_AXPRESS"] == nil {
-            pressed = await Task.detached { AccessibilityIndex.press(extra) }.value
+        if !rightButton, ProcessInfo.processInfo.environment["COFFEEBAR_NO_AXPRESS"] == nil {
+            let pid = context.pid
+            let startBounds = MenuBarScanner.bounds(of: item.windowID) ?? item.bounds
+            func reacted() -> Bool {
+                if let pid, MenuBarScanner.onScreenWindows(ownedBy: pid).contains(where: { before[$0.key] == nil }) { return true }
+                if let now = MenuBarScanner.bounds(of: item.windowID), abs(now.width - startBounds.width) > 1 || !MenuBarScanner.isOnScreen(now) { return true }
+                return false
+            }
+            var live = item
+            live.bounds = startBounds
+            pressed = AccessibilityIndex.activate(item: live, extra: extra, reacted: reacted)
             if pressed {
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                // 返回成功但什么都没弹出来也算失败（有的 App 会这样），退回鼠标点击。
-                let popped = context.pid.map { MenuBarScanner.onScreenWindows(ownedBy: $0) }?.contains { before[$0.key] == nil } ?? false
-                let activated = context.pid.flatMap { NSRunningApplication(processIdentifier: $0)?.isActive } ?? false
-                pressed = popped || activated
-                NSLog("CoffeeBar: AXPress \(item.ownerName) -> popped=\(popped) activated=\(activated)")
+                // 再等一小会儿确认真的有反应；辅助功能"接受"了但什么都没弹的也退回鼠标点击。
+                var ok = false
+                for _ in 0..<15 {
+                    try? await Task.sleep(nanoseconds: 20_000_000)
+                    if reacted() || (pid.flatMap { NSRunningApplication(processIdentifier: $0)?.isActive } ?? false) { ok = true; break }
+                }
+                pressed = ok
+                NSLog("CoffeeBar: AX activation of \(item.ownerName) -> \(ok ? "reacted" : "no reaction")")
+            } else if reacted() {
+                pressed = true
             }
         }
         if !pressed {
