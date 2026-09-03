@@ -57,7 +57,8 @@ enum ItemMover {
         let cursorOnWantedSide = rightSide ? cursor.x > targetFrame.midX : cursor.x < targetFrame.midX
         let stayPut = targetOnScreen && cursorOnWantedSide
 
-        guard let down = event(.leftMouseDown, at: cursor, windowID: windowID, pid: ownerPID, flags: .maskCommand, source: source),
+        let farDown = ProcessInfo.processInfo.environment["COFFEEBAR_FAR_DOWN"] != nil
+        guard let down = event(.leftMouseDown, at: farDown ? CGPoint(x: 20_000, y: 20_000) : cursor, windowID: windowID, pid: ownerPID, flags: .maskCommand, source: source),
               let up = event(.leftMouseUp, at: stayPut ? cursor : dropPoint, windowID: targetWindowID, pid: ownerPID, flags: [], source: source)
         else { return nil }
 
@@ -68,9 +69,17 @@ enum ItemMover {
         source.localEventsSuppressionInterval = 0
 
         let t0 = Date()
+        if farDown { CGDisplayHideCursor(CGMainDisplayID()) }
         down.post(tap: .cgSessionEventTap)
         let afterDown = await waitForFrameChange(of: windowID, from: itemFrame, timeout: 0.3)
         let t1 = Date()
+        if farDown && stayPut {
+            up.post(tap: .cgSessionEventTap)
+            CGWarpMouseCursorPosition(cursor); CGAssociateMouseAndMouseCursorPosition(1); CGDisplayShowCursor(CGMainDisplayID())
+            let afterUp = await waitForFrameChange(of: windowID, from: afterDown ?? itemFrame, timeout: 0.5)
+            NSLog("CoffeeBar: move \(windowID) (far down, cursor hidden \(Int(Date().timeIntervalSince(t0) * 1000))ms): \(itemFrame) -> \(String(describing: afterUp ?? afterDown))")
+            return afterUp ?? afterDown
+        }
 
         var hiddenMs = 0
         if stayPut {

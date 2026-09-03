@@ -44,6 +44,13 @@ final class MenuBarController: NSObject {
         var interfaceWindow: CGWindowID?
     }
     private var tempShown: [TempShown] = []
+
+    /// 每个 App 学到的激活方式："ax" 或 "click"。
+    private static let ledgerKey = "CoffeeBar.activationLedger"
+    private var activationLedger: [String: String] {
+        get { UserDefaults.standard.dictionary(forKey: Self.ledgerKey) as? [String: String] ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: Self.ledgerKey) }
+    }
     private var rehideTimer: Timer?
     private var mouseUpMonitor: Any?
     /// 上次打开面板时扫到的辅助功能索引，点击兜底时用。
@@ -315,13 +322,23 @@ final class MenuBarController: NSObject {
         // 只有退回鼠标点击时才需要等 App 自己的坐标更新。
         var target = MenuBarScanner.bounds(of: item.windowID) ?? item.bounds
         let before = context.pid.map { MenuBarScanner.onScreenWindows(ownedBy: $0) } ?? [:]
-        // 左键优先走辅助功能：完全不碰鼠标。不支持的 App 再合成鼠标点击。
+        // 左键优先走辅助功能：完全不碰鼠标。
+        // 有的 App（Chrome 的 Gemini）接受 AXPress 却只认真实点击，按 App 学一次并记住：
+        //   "ax"    辅助功能就够（菜单类、只显示窗口的 App）
+        //   "click" 必须真实点击（光标会闪一下）
+        let bundleID = context.pid.flatMap { NSRunningApplication(processIdentifier: $0)?.bundleIdentifier }
+        let learned = bundleID.flatMap { activationLedger[$0] }
         var pressed = false
-        if !rightButton, ProcessInfo.processInfo.environment["COFFEEBAR_NO_AXPRESS"] == nil {
+        var newWindowSeen = false
+        func newWindows() -> Bool {
+            guard let pid = context.pid else { return false }
+            return MenuBarScanner.onScreenWindows(ownedBy: pid).contains { before[$0.key] == nil }
+        }
+        if !rightButton, learned != "click", ProcessInfo.processInfo.environment["COFFEEBAR_NO_AXPRESS"] == nil {
             let pid = context.pid
             let startBounds = MenuBarScanner.bounds(of: item.windowID) ?? item.bounds
             func reacted() -> Bool {
-                if let pid, MenuBarScanner.onScreenWindows(ownedBy: pid).contains(where: { before[$0.key] == nil }) { return true }
+                if newWindows() { return true }
                 if let now = MenuBarScanner.bounds(of: item.windowID), abs(now.width - startBounds.width) > 1 || !MenuBarScanner.isOnScreen(now) { return true }
                 return false
             }
@@ -329,24 +346,30 @@ final class MenuBarController: NSObject {
             live.bounds = startBounds
             // 图标刚挪进来，App 自己的坐标要过一会儿才更新；每 30 毫秒试一次，坐标一就绪立即按。
             let t0 = Date()
+            if let ms = UInt64(ProcessInfo.processInfo.environment["COFFEEBAR_AX_DELAY_MS"] ?? "") { try? await Task.sleep(nanoseconds: ms * 1_000_000) }
             for attempt in 0..<10 {
                 live.bounds = MenuBarScanner.bounds(of: item.windowID) ?? live.bounds
                 pressed = AccessibilityIndex.activate(item: live, extra: extra, reacted: reacted)
                 if pressed || reacted() { break }
                 if attempt < 9 { try? await Task.sleep(nanoseconds: 30_000_000) }
             }
-            NSLog("CoffeeBar: AX activation attempt loop took \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
-            if pressed {
-                // 再等一小会儿确认真的有反应；辅助功能"接受"了但什么都没弹的也退回鼠标点击。
-                var ok = false
-                for _ in 0..<15 {
-                    try? await Task.sleep(nanoseconds: 20_000_000)
-                    if reacted() || (pid.flatMap { NSRunningApplication(processIdentifier: $0)?.isActive } ?? false) { ok = true; break }
-                }
-                pressed = ok
-                NSLog("CoffeeBar: AX activation of \(item.ownerName) -> \(ok ? "reacted" : "no reaction")")
-            } else if reacted() {
+            NSLog("CoffeeBar: AX activation attempt loop took \(Int(Date().timeIntervalSince(t0) * 1000)) ms, accepted=\(pressed)")
+            if pressed || reacted() {
                 pressed = true
+                if learned == "ax" {
+                    // 已知辅助功能足够，不用再观察。
+                } else {
+                    // 还没学过：给它最多 600 毫秒看有没有弹出新窗口。
+                    for _ in 0..<30 {
+                        if newWindows() { newWindowSeen = true; break }
+                        try? await Task.sleep(nanoseconds: 20_000_000)
+                    }
+                    if !newWindowSeen {
+                        // 没弹窗：可能是只认真实点击的 App，也可能是只显示窗口的 App。补一次点击来分辨。
+                        pressed = false
+                        _ = pid
+                    }
+                }
             }
         }
         if !pressed {
@@ -358,8 +381,19 @@ final class MenuBarController: NSObject {
                 target = MenuBarScanner.bounds(of: item.windowID) ?? target
             }
             NSLog("CoffeeBar: click \(item.ownerName) at \(target)")
+            let beforeClick = context.pid.map { MenuBarScanner.onScreenWindows(ownedBy: $0) } ?? [:]
             ClickForwarder.click(at: CGPoint(x: target.midX, y: target.midY), rightButton: rightButton,
                                  windowID: item.windowID, ownerPID: item.ownerPID, targetPID: extra?.pid)
+            if !rightButton, let bundleID, learned == nil {
+                // 学习：点击弹出了新窗口 => 这个 App 必须真实点击；没弹 => 辅助功能就够。
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                let clickOpened = context.pid.map { MenuBarScanner.onScreenWindows(ownedBy: $0).contains { beforeClick[$0.key] == nil } } ?? false
+                activationLedger[bundleID] = clickOpened ? "click" : "ax"
+                NSLog("CoffeeBar: learned \(bundleID) -> \(activationLedger[bundleID]!)")
+            }
+        } else if let bundleID, learned == nil, newWindowSeen {
+            activationLedger[bundleID] = "ax"
+            NSLog("CoffeeBar: learned \(bundleID) -> ax")
         }
 
         guard let pid = context.pid, let targetApp = NSRunningApplication(processIdentifier: pid) else {
