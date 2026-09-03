@@ -14,8 +14,8 @@ Signed and notarized by Apple. Requires macOS 14 or later, Apple Silicon or Inte
 
 ## Features
 
-- **One-click access.** Click `<` to see every hidden icon in a panel. Click an icon and it works exactly like in the menu bar: menus open, windows come to the front. The hidden section expands while the menu is open and folds back when it closes. No synthetic mouse events, so your pointer is never touched.
-- **Search.** With the panel open, just type the app's name. Enter opens it.
+- **Expand and collapse.** Click `<` and the hidden icons slide into the menu bar; click any of them as usual. Click `<` again or anywhere else and they fold away. Nothing synthetic happens: no fake clicks, your pointer is never touched.
+- **Panel with search** (optional, ⌥-click `<` or turn it on as the default). Every hidden icon listed by app; type to filter, Enter to open.
 - **Drag to hide.** Hold ⌘ and drag an icon to the left of `<` to hide it, to the right to keep it. CoffeeBar remembers.
 - **Arrange mode.** Right-click `<` → *Arrange Items…* to see everything at once and drag icons around.
 - **Icons stay put.** After a restart, or when an app drops its icon somewhere random, it goes back where you put it.

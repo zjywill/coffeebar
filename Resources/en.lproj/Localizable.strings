@@ -10,4 +10,6 @@
 "Use panel only on built-in display (expand inline on external displays)" = "Use panel only on built-in display (expand inline on external displays)";
 "Check for Updates…" = "Check for Updates…";
 "Quit CoffeeBar" = "Quit CoffeeBar";
-"Reveal only the clicked item (may flicker briefly)" = "Reveal only the clicked item (may flicker briefly)";
+"Panel: expand the whole hidden section when opening an item" = "Panel: expand the whole hidden section when opening an item";
+"Click “<” opens the panel instead of expanding the menu bar" = "Click “<” opens the panel instead of expanding the menu bar";
+"Click “<” to expand or collapse. ⌘-drag items or “/” to rearrange; items left of “/” are hidden." = "Click “<” to expand or collapse. ⌘-drag items or “/” to rearrange; items left of “/” are hidden.";

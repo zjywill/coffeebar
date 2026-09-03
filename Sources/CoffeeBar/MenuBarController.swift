@@ -27,10 +27,17 @@ final class MenuBarController: NSObject {
 
     enum RevealMode: String { case section, item }
     private static let revealModeKey = "CoffeeBar.revealMode"
-    /// 从面板打开图标的方式。默认展开整段：没有合成鼠标事件，不闪、不动光标。
+    /// 从面板打开图标的方式。默认只露出该图标（Thaw / Bartender 的做法）；可选展开整段。
     private var revealMode: RevealMode {
-        get { RevealMode(rawValue: UserDefaults.standard.string(forKey: Self.revealModeKey) ?? "") ?? .section }
+        get { RevealMode(rawValue: UserDefaults.standard.string(forKey: Self.revealModeKey) ?? "") ?? .item }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: Self.revealModeKey) }
+    }
+
+    /// 左键点 `<` 时弹面板而不是在菜单栏展开（默认关，Thaw 的默认交互是展开 / 收起）。
+    private static let clickOpensPanelKey = "CoffeeBar.clickOpensPanel"
+    private var clickOpensPanel: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.clickOpensPanelKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.clickOpensPanelKey) }
     }
 
     private static let panelOnlyOnBuiltInKey = "CoffeeBar.panelOnlyOnBuiltIn"
@@ -146,14 +153,19 @@ final class MenuBarController: NSObject {
             if wasArranging { recordLayoutSoon() }
             return
         }
-        if event?.modifierFlags.contains(.option) == true {
+        // 默认（Thaw 的交互）：左键在菜单栏里展开 / 收起隐藏区，用户自己点图标，不做任何自动点击。
+        // ⌥ + 左键：进入整理模式（展开且不自动收回）。开了"弹面板"选项则左右对调。
+        let wantPanel = clickOpensPanel != (event?.modifierFlags.contains(.option) == true)
+        if wantPanel {
+            if panelOnlyOnBuiltIn, let screen = toggleItem.button?.window?.screen, !MenuBarScanner.isBuiltIn(screen) {
+                setInline(.expanded)
+            } else {
+                openPanel()
+            }
+        } else if event?.modifierFlags.contains(.command) == true {
             setInline(.arranging)
-            return
-        }
-        if panelOnlyOnBuiltIn, let screen = toggleItem.button?.window?.screen, !MenuBarScanner.isBuiltIn(screen) {
-            setInline(.expanded)
         } else {
-            openPanel()
+            setInline(.expanded)
         }
     }
 
@@ -575,11 +587,15 @@ final class MenuBarController: NSObject {
         arrange.target = self
         arrange.action = inlineState == .arranging ? #selector(finishArranging) : #selector(startArranging)
         menu.addItem(arrange)
-        menu.addItem(withTitle: L("While arranging, items left of “/” are hidden. ⌘-drag items or “/” to adjust."), action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: L("Click “<” to expand or collapse. ⌘-drag items or “/” to rearrange; items left of “/” are hidden."), action: nil, keyEquivalent: "")
         menu.addItem(.separator())
-        let onlyItem = NSMenuItem(title: L("Reveal only the clicked item (may flicker briefly)"), action: #selector(toggleRevealMode), keyEquivalent: "")
+        let panelItem = NSMenuItem(title: L("Click “<” opens the panel instead of expanding the menu bar"), action: #selector(toggleClickOpensPanel), keyEquivalent: "")
+        panelItem.target = self
+        panelItem.state = clickOpensPanel ? .on : .off
+        menu.addItem(panelItem)
+        let onlyItem = NSMenuItem(title: L("Panel: expand the whole hidden section when opening an item"), action: #selector(toggleRevealMode), keyEquivalent: "")
         onlyItem.target = self
-        onlyItem.state = revealMode == .item ? .on : .off
+        onlyItem.state = revealMode == .section ? .on : .off
         menu.addItem(onlyItem)
         let builtIn = NSMenuItem(title: L("Use panel only on built-in display (expand inline on external displays)"), action: #selector(togglePanelOnlyOnBuiltIn), keyEquivalent: "")
         builtIn.target = self
@@ -611,6 +627,10 @@ final class MenuBarController: NSObject {
             axExtras = await Task.detached(priority: .userInitiated) { AccessibilityIndex.scan() }.value
             layoutManager.recordCurrent(extras: axExtras)
         }
+    }
+
+    @objc private func toggleClickOpensPanel() {
+        clickOpensPanel.toggle()
     }
 
     @objc private func toggleRevealMode() {
