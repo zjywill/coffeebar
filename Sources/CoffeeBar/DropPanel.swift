@@ -41,6 +41,9 @@ final class ItemView: NSView {
         addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways], owner: self))
     }
 
+    /// 面板是非激活窗口，不加这个的话第一次点击会被 AppKit 用来"激活窗口"而不派发给视图。
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
     override func mouseEntered(with event: NSEvent) { hovered = true }
     override func mouseExited(with event: NSEvent) { hovered = false }
     override func mouseDown(with event: NSEvent) {}
@@ -70,6 +73,8 @@ final class ItemView: NSView {
 final class DropPanel: NSPanel {
     var onItemClick: ((MenuBarItem, Bool) -> Void)?
     private var outsideClickMonitor: Any?
+
+    override var canBecomeKey: Bool { false }
 
     init() {
         super.init(contentRect: .zero,

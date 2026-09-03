@@ -62,6 +62,19 @@ final class MenuBarController: NSObject {
         }
 
         applyInlineState()
+        refreshAccessibilityIndex()
+    }
+
+    /// 后台重扫辅助功能索引。面板打开时先用上次的结果即时显示，不等这次扫完。
+    private var refreshing = false
+    private func refreshAccessibilityIndex() {
+        guard Permissions.hasAccessibility, !refreshing else { return }
+        refreshing = true
+        Task {
+            let extras = await Task.detached(priority: .userInitiated) { AccessibilityIndex.scan() }.value
+            axExtras = extras
+            refreshing = false
+        }
     }
 
     // MARK: - 开关按钮
@@ -104,8 +117,10 @@ final class MenuBarController: NSObject {
 
         var items = MenuBarScanner.hiddenItems()
         Task {
-            // 辅助功能扫描要跨进程问一圈，放后台线程。
-            axExtras = await Task.detached { AccessibilityIndex.scan() }.value
+            // 没有缓存（首次授权后第一次打开）就只好等这一次扫完。
+            if axExtras.isEmpty {
+                axExtras = await Task.detached(priority: .userInitiated) { AccessibilityIndex.scan() }.value
+            }
             for i in items.indices {
                 if let extra = AccessibilityIndex.match(items[i].bounds, in: axExtras) {
                     items[i].ownerName = extra.appName
@@ -113,25 +128,57 @@ final class MenuBarController: NSObject {
                 }
             }
             panel.showItems(items.map { ($0, $0.icon) }, notice: nil, anchor: anchor)
+            // 顺手刷新缓存，下次更准（新启动的 App、变过位置的图标）。
+            refreshAccessibilityIndex()
         }
+    }
+
+    func debugArrange() { setInline(.arranging) }
+
+    /// 调试用：不经过面板，直接对某个 App 的隐藏图标走一遍转发流程。
+    func debugActivate(appNamed name: String) {
+        var items = MenuBarScanner.hiddenItems()
+        axExtras = AccessibilityIndex.scan()
+        for i in items.indices {
+            if let extra = AccessibilityIndex.match(items[i].bounds, in: axExtras) { items[i].ownerName = extra.appName }
+        }
+        guard let item = items.first(where: { $0.ownerName == name }) else {
+            NSLog("CoffeeBar: no hidden item for \(name); hidden = \(items.map(\.ownerName))")
+            return
+        }
+        activate(item, rightButton: false)
     }
 
     /// 点了面板里的图标：把真图标临时移回菜单栏，在它上面合成一次点击。
     /// 直接对屏幕外的图标用辅助功能 AXPress 虽然返回成功，但菜单不会显示，所以必须先展开。
-    private func activate(_ item: MenuBarItem, rightButton: Bool) {
+    func activate(_ item: MenuBarItem, rightButton: Bool) {
         panel.dismiss()
         if !Permissions.hasAccessibility {
             Permissions.requestAccessibility()
             return
         }
         setInline(.temporary)
+        let extra = AccessibilityIndex.match(item.bounds, in: axExtras)
         Task {
-            if let rect = await ClickForwarder.waitUntilOnScreen(item.windowID) {
-                ClickForwarder.click(at: CGPoint(x: rect.midX, y: rect.midY), rightButton: rightButton)
-            } else if let extra = AccessibilityIndex.match(item.bounds, in: axExtras) {
-                // 展开了也挤不进屏幕（屏幕太窄或被刘海占了），只能直接按它。
-                _ = AccessibilityIndex.press(extra)
+            guard let rect = await ClickForwarder.waitUntilOnScreen(item.windowID) else {
+                // 展开了也挤不进屏幕（屏幕太窄或被刘海占了），只能通过辅助功能直接按。
+                NSLog("CoffeeBar: \(item.ownerName) never came on screen, AX press")
+                if let extra { _ = AccessibilityIndex.press(extra) }
+                return
             }
+            // 窗口服务器报告图标回到屏幕时它还不能点：目标 App 自己的坐标还没更新，点击会穿到下面的窗口。
+            // 等 App 的辅助功能坐标也回到屏幕上；认不出 App 的就退而求其次等一段固定时间。
+            let started = Date()
+            var target = rect
+            if let extra, let axFrame = await AccessibilityIndex.waitUntilOnScreen(extra) {
+                target = axFrame
+            } else {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                target = MenuBarScanner.bounds(of: item.windowID) ?? rect
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            NSLog("CoffeeBar: click \(item.ownerName) at \(target) after \(Int(Date().timeIntervalSince(started) * 1000)) ms")
+            ClickForwarder.click(at: CGPoint(x: target.midX, y: target.midY), rightButton: rightButton)
         }
     }
 

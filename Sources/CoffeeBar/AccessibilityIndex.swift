@@ -17,27 +17,35 @@ enum AccessibilityIndex {
     /// 遍历所有可能有菜单栏图标的 App。没有辅助功能权限时返回空。
     static func scan() -> [AXMenuExtra] {
         guard AXIsProcessTrusted() else { return [] }
-        var result: [AXMenuExtra] = []
         // .prohibited 的是纯后台进程，不可能有菜单栏图标。
-        for app in NSWorkspace.shared.runningApplications where app.activationPolicy != .prohibited {
-            let axApp = AXUIElementCreateApplication(app.processIdentifier)
-            // 别让一个卡死的 App 拖住整个扫描。
-            AXUIElementSetMessagingTimeout(axApp, 0.25)
-            var extras: AnyObject?
-            guard AXUIElementCopyAttributeValue(axApp, "AXExtrasMenuBar" as CFString, &extras) == .success,
-                  let bar = extras
-            else { continue }
-            var children: AnyObject?
-            guard AXUIElementCopyAttributeValue(bar as! AXUIElement, kAXChildrenAttribute as CFString, &children) == .success,
-                  let elements = children as? [AXUIElement]
-            else { continue }
-            let name = app.localizedName ?? "pid \(app.processIdentifier)"
-            for element in elements {
-                guard let frame = frame(of: element) else { continue }
-                result.append(AXMenuExtra(element: element, appName: name, pid: app.processIdentifier, frame: frame, icon: app.icon))
-            }
+        let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy != .prohibited }
+        // 每个 App 都要跨进程问一次，串行要一秒多；并发做，慢的 App 只拖累自己。
+        var perApp = [[AXMenuExtra]](repeating: [], count: apps.count)
+        let lock = NSLock()
+        DispatchQueue.concurrentPerform(iterations: apps.count) { index in
+            let found = extras(of: apps[index])
+            lock.lock(); perApp[index] = found; lock.unlock()
         }
-        return result
+        return perApp.flatMap { $0 }
+    }
+
+    private static func extras(of app: NSRunningApplication) -> [AXMenuExtra] {
+        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+        // 别让一个卡死的 App 拖住整个扫描。
+        AXUIElementSetMessagingTimeout(axApp, 0.25)
+        var extras: AnyObject?
+        guard AXUIElementCopyAttributeValue(axApp, "AXExtrasMenuBar" as CFString, &extras) == .success,
+              let bar = extras
+        else { return [] }
+        var children: AnyObject?
+        guard AXUIElementCopyAttributeValue(bar as! AXUIElement, kAXChildrenAttribute as CFString, &children) == .success,
+              let elements = children as? [AXUIElement]
+        else { return [] }
+        let name = app.localizedName ?? "pid \(app.processIdentifier)"
+        return elements.compactMap { element in
+            guard let frame = frame(of: element) else { return nil }
+            return AXMenuExtra(element: element, appName: name, pid: app.processIdentifier, frame: frame, icon: app.icon)
+        }
     }
 
     /// 找和某个窗口位置最接近的图标。
@@ -49,10 +57,25 @@ enum AccessibilityIndex {
     }
 
     static func press(_ extra: AXMenuExtra) -> Bool {
-        AXUIElementPerformAction(extra.element, kAXPressAction as CFString) == .success
+        let result = AXUIElementPerformAction(extra.element, kAXPressAction as CFString)
+        if result != .success { NSLog("CoffeeBar: AXPress \(extra.appName) failed: \(result.rawValue)") }
+        return result == .success
     }
 
-    private static func frame(of element: AXUIElement) -> CGRect? {
+    /// 等目标 App 自己的辅助功能坐标也回到屏幕上。
+    /// 窗口服务器移动图标窗口之后，App 内部的坐标要过一会儿才更新，而点击命中靠的是后者。
+    static func waitUntilOnScreen(_ extra: AXMenuExtra, timeout: TimeInterval = 2.5) async -> CGRect? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let frame = frame(of: extra.element), MenuBarScanner.isOnScreen(frame) {
+                return frame
+            }
+            try? await Task.sleep(nanoseconds: 40_000_000)
+        }
+        return nil
+    }
+
+    static func frame(of element: AXUIElement) -> CGRect? {
         var posValue: AnyObject?
         var sizeValue: AnyObject?
         guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posValue) == .success,
