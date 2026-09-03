@@ -48,6 +48,28 @@ enum MenuBarScanner {
         allStatusItems().filter { !isOnScreen($0.bounds) }
     }
 
+    /// 我们自己那个几千像素宽的分隔符窗口（唯一一个超宽的状态项窗口）。
+    static func separatorWindowID() -> CGWindowID? {
+        guard let list = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+        let statusLevel = Int(CGWindowLevelForKey(.statusWindow))
+        for info in list {
+            guard let layer = info[kCGWindowLayer as String] as? Int, layer == statusLevel,
+                  let dict = info[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: dict),
+                  bounds.width > 1000, bounds.height < 60,
+                  let number = info[kCGWindowNumber as String] as? Int
+            else { continue }
+            return CGWindowID(number)
+        }
+        return nil
+    }
+
+    /// 屏幕是不是内建屏（笔记本自己的屏）。
+    static func isBuiltIn(_ screen: NSScreen) -> Bool {
+        guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else { return false }
+        return CGDisplayIsBuiltin(number) != 0
+    }
+
     /// 某个进程当前在屏幕上的窗口及其层级。用来判断点击之后有没有弹出菜单 / 弹窗。
     static func onScreenWindows(ownedBy pid: pid_t) -> [CGWindowID: Int] {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else { return [:] }

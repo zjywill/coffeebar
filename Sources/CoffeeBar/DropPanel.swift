@@ -5,17 +5,17 @@ final class ItemView: NSView {
     let item: MenuBarItem
     private let image: NSImage?
     private var hovered = false { didSet { needsDisplay = true } }
+    var isSelected = false { didSet { needsDisplay = true } }
     var onClick: ((MenuBarItem, Bool) -> Void)?
 
     private static let labelAttributes: [NSAttributedString.Key: Any] = [
         .font: NSFont.systemFont(ofSize: 12),
         .foregroundColor: NSColor.labelColor,
     ]
-
-    let itemWidth: CGFloat
-
     private static let iconSize: CGFloat = 20
     private static let cellHeight: CGFloat = 30
+
+    let itemWidth: CGFloat
 
     init(item: MenuBarItem, image: NSImage?) {
         self.item = item
@@ -52,8 +52,8 @@ final class ItemView: NSView {
     override func rightMouseUp(with event: NSEvent) { onClick?(item, true) }
 
     override func draw(_ dirtyRect: NSRect) {
-        if hovered {
-            NSColor.controlAccentColor.withAlphaComponent(0.25).setFill()
+        if hovered || isSelected {
+            NSColor.controlAccentColor.withAlphaComponent(isSelected ? 0.4 : 0.25).setFill()
             NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
         }
         if let image {
@@ -70,11 +70,21 @@ final class ItemView: NSView {
 }
 
 /// 挂在菜单栏下方的浮动面板，相当于 Bartender Bar。
-final class DropPanel: NSPanel {
-    var onItemClick: ((MenuBarItem, Bool) -> Void)?
-    private var outsideClickMonitor: Any?
+/// 顶部有搜索框：直接打字按 App 名过滤，← → 选择，回车触发，Esc 关闭。
+final class DropPanel: NSPanel, NSTextFieldDelegate {
+    typealias NoticeButton = (title: String, action: () -> Void)
 
-    override var canBecomeKey: Bool { false }
+    var onItemClick: ((MenuBarItem, Bool) -> Void)?
+
+    private var outsideClickMonitor: Any?
+    private var allEntries: [(MenuBarItem, NSImage?)] = []
+    private var filtered: [(MenuBarItem, NSImage?)] = []
+    private var itemViews: [ItemView] = []
+    private var selectedIndex = 0
+    private var anchor: NSRect = .zero
+    private let searchField = NSTextField()
+    private let rowsContainer = NSStackView()
+    private var noticeActions: [() -> Void] = []
 
     init() {
         super.init(contentRect: .zero,
@@ -88,13 +98,45 @@ final class DropPanel: NSPanel {
         hidesOnDeactivate = false
         isReleasedWhenClosed = false
         collectionBehavior = [.canJoinAllSpaces, .transient, .ignoresCycle]
+
+        searchField.placeholderString = "输入 App 名过滤，回车打开"
+        searchField.font = .systemFont(ofSize: 12)
+        searchField.isBezeled = false
+        searchField.drawsBackground = false
+        searchField.focusRingType = .none
+        searchField.delegate = self
+        searchField.translatesAutoresizingMaskIntoConstraints = false
+
+        if ProcessInfo.processInfo.environment["COFFEEBAR_DEBUG"] != nil {
+            NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
+                NSLog("CoffeeBar local keyDown code=\(event.keyCode) chars=\(event.characters ?? "") keyWindow=\(NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "nil")")
+                return event
+            }
+        }
+    }
+
+    /// 非激活面板也能成为 key window，这样搜索框才收得到键盘输入，而且不会把当前 App 切走。
+    override var canBecomeKey: Bool { true }
+
+    /// Esc 不一定走到搜索框的 delegate（字段编辑器有时把它交给窗口），窗口这层兜底。
+    override func cancelOperation(_ sender: Any?) { dismiss() }
+    override func keyDown(with event: NSEvent) {
+        if ProcessInfo.processInfo.environment["COFFEEBAR_DEBUG"] != nil { NSLog("CoffeeBar panel keyDown code=\(event.keyCode)") }
+        if event.keyCode == 53 { dismiss(); return }
+        super.keyDown(with: event)
+    }
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown, event.keyCode == 53 { dismiss(); return }
+        super.sendEvent(event)
     }
 
     // MARK: - 内容
 
-    typealias NoticeButton = (title: String, action: () -> Void)
-
     func showItems(_ entries: [(MenuBarItem, NSImage?)], notice: (text: String, buttons: [NoticeButton])?, anchor: NSRect) {
+        self.anchor = anchor
+        allEntries = entries
+        searchField.stringValue = ""
+
         let column = NSStackView()
         column.orientation = .vertical
         column.alignment = .trailing
@@ -103,32 +145,106 @@ final class DropPanel: NSPanel {
         if let notice {
             column.addArrangedSubview(makeNotice(notice.text, buttons: notice.buttons))
         }
-
         if entries.isEmpty, notice == nil {
             column.addArrangedSubview(makeLabel("没有隐藏的图标。右键 “<” 选「整理图标…」，把要藏的拖到 “/” 左边。"))
         }
+        if !entries.isEmpty {
+            let searchRow = NSStackView()
+            searchRow.orientation = .horizontal
+            searchRow.spacing = 4
+            let icon = NSImageView(image: NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)!)
+            icon.contentTintColor = .secondaryLabelColor
+            searchRow.addArrangedSubview(icon)
+            searchRow.addArrangedSubview(searchField)
+            searchField.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+            column.addArrangedSubview(searchRow)
+            searchRow.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
 
-        // 简单的流式布局：一行放不下就换行。
+            rowsContainer.orientation = .vertical
+            rowsContainer.alignment = .trailing
+            rowsContainer.spacing = 0
+            column.addArrangedSubview(rowsContainer)
+            applyFilter()
+        }
+
+        present(column)
+        if !entries.isEmpty {
+            makeKey()
+            makeFirstResponder(searchField)
+        }
+    }
+
+    private func applyFilter() {
+        let query = searchField.stringValue.trimmingCharacters(in: .whitespaces).lowercased()
+        filtered = query.isEmpty ? allEntries : allEntries.filter { $0.0.ownerName.lowercased().contains(query) }
+        selectedIndex = 0
+        rebuildRows()
+    }
+
+    private func rebuildRows() {
+        rowsContainer.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        itemViews = []
         let maxRowWidth = min(720, (NSScreen.main?.frame.width ?? 1440) * 0.6)
         var row = makeRow()
         var rowWidth: CGFloat = 0
-        for (item, image) in entries {
+        for (index, (item, image)) in filtered.enumerated() {
             let view = ItemView(item: item, image: image)
+            view.isSelected = index == selectedIndex && !searchField.stringValue.isEmpty
             if rowWidth > 0, rowWidth + view.itemWidth > maxRowWidth {
-                column.addArrangedSubview(row)
+                rowsContainer.addArrangedSubview(row)
                 row = makeRow()
                 rowWidth = 0
             }
             view.onClick = { [weak self] item, right in self?.onItemClick?(item, right) }
             row.addArrangedSubview(view)
+            itemViews.append(view)
             rowWidth += view.itemWidth
         }
         if !row.arrangedSubviews.isEmpty {
-            column.addArrangedSubview(row)
+            rowsContainer.addArrangedSubview(row)
         }
-
-        present(column, anchor: anchor)
+        if filtered.isEmpty {
+            rowsContainer.addArrangedSubview(makeLabel("没有匹配的 App"))
+        }
+        relayout()
     }
+
+    private func updateSelection() {
+        for (index, view) in itemViews.enumerated() {
+            view.isSelected = index == selectedIndex
+        }
+    }
+
+    // MARK: - 键盘
+
+    func controlTextDidChange(_ obj: Notification) {
+        applyFilter()
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if ProcessInfo.processInfo.environment["COFFEEBAR_DEBUG"] != nil { NSLog("CoffeeBar panel command: \(commandSelector)") }
+        switch commandSelector {
+        case #selector(NSResponder.insertNewline(_:)):
+            if filtered.indices.contains(selectedIndex) {
+                onItemClick?(filtered[selectedIndex].0, false)
+            }
+            return true
+        case #selector(NSResponder.cancelOperation(_:)), #selector(NSResponder.complete(_:)):
+            // 字段编辑器里 Esc 有时映射成 complete:（自动补全），两个都当关闭。
+            dismiss()
+            return true
+        case #selector(NSResponder.moveRight(_:)), #selector(NSResponder.moveDown(_:)):
+            if !filtered.isEmpty { selectedIndex = (selectedIndex + 1) % filtered.count; updateSelection() }
+            return true
+        case #selector(NSResponder.moveLeft(_:)), #selector(NSResponder.moveUp(_:)):
+            if !filtered.isEmpty { selectedIndex = (selectedIndex - 1 + filtered.count) % filtered.count; updateSelection() }
+            return true
+        default:
+            return false
+        }
+    }
+
+    // MARK: - 组件
 
     private func makeRow() -> NSStackView {
         let row = NSStackView()
@@ -144,8 +260,6 @@ final class DropPanel: NSPanel {
         label.preferredMaxLayoutWidth = 320
         return label
     }
-
-    private var noticeActions: [() -> Void] = []
 
     private func makeNotice(_ text: String, buttons: [NoticeButton]) -> NSView {
         let stack = NSStackView()
@@ -176,7 +290,9 @@ final class DropPanel: NSPanel {
         }
     }
 
-    private func present(_ content: NSView, anchor: NSRect) {
+    // MARK: - 显示 / 布局
+
+    private func present(_ content: NSView) {
         let background = NSVisualEffectView()
         background.material = .popover
         background.blendingMode = .behindWindow
@@ -194,26 +310,30 @@ final class DropPanel: NSPanel {
             content.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: inset),
             content.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -inset),
         ])
-
         contentView = background
+        relayout()
+        orderFrontRegardless()
+        startOutsideClickMonitor()
+    }
+
+    /// 按内容尺寸重新摆放：右对齐到开关按钮下方，并且不出屏幕。
+    private func relayout() {
+        guard let background = contentView else { return }
         background.layoutSubtreeIfNeeded()
         let size = background.fittingSize
-
-        // 右对齐到开关按钮下方，并且不出屏幕。
         let screen = NSScreen.screens.first { $0.frame.intersects(anchor) } ?? NSScreen.main
         var origin = NSPoint(x: anchor.maxX - size.width, y: anchor.minY - size.height - 4)
         if let screen {
             origin.x = max(screen.visibleFrame.minX + 4, min(origin.x, screen.visibleFrame.maxX - size.width - 4))
         }
         setFrame(NSRect(origin: origin, size: size), display: true)
-        orderFrontRegardless()
-        startOutsideClickMonitor()
     }
 
     // MARK: - 关闭
 
     func dismiss() {
         stopOutsideClickMonitor()
+        searchField.stringValue = ""
         orderOut(nil)
     }
 

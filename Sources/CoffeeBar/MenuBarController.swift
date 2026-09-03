@@ -15,12 +15,22 @@ final class MenuBarController: NSObject {
     private static let hiddenLength: CGFloat = 10_000
     private static let shownLength: CGFloat = 12
 
-    private enum InlineState { case hidden, arranging }
+    /// expanded：外接宽屏上不用面板，直接展开，点菜单栏以外的地方自动收回。
+    private enum InlineState { case hidden, arranging, expanded }
 
     private let toggleItem: NSStatusItem
     private let separatorItem: NSStatusItem
     private let panel = DropPanel()
     private let updater = UpdateController()
+    private let layoutManager = LayoutManager()
+    private var outsideClickMonitor: Any?
+
+    private static let panelOnlyOnBuiltInKey = "CoffeeBar.panelOnlyOnBuiltIn"
+    /// 外接显示器够宽，不需要面板；只在内建屏（有刘海、窄）上用面板。
+    private var panelOnlyOnBuiltIn: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.panelOnlyOnBuiltInKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.panelOnlyOnBuiltInKey) }
+    }
 
     private var inlineState: InlineState = .hidden
 
@@ -76,6 +86,18 @@ final class MenuBarController: NSObject {
 
         applyInlineState()
         refreshAccessibilityIndex()
+
+        layoutManager.canMove = { [weak self] in
+            guard let self else { return false }
+            return inlineState == .hidden && tempShown.isEmpty && !panel.isVisible
+        }
+        layoutManager.toggleWindowID = { [weak self] in self?.toggleWindowID }
+        layoutManager.refreshAccessibilityIndex = { [weak self] in
+            let extras = await Task.detached(priority: .utility) { AccessibilityIndex.scan() }.value
+            self?.axExtras = extras
+            return extras
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [layoutManager] in layoutManager.start() }
     }
 
     /// 后台重扫辅助功能索引。面板打开时先用上次的结果即时显示，不等这次扫完。
@@ -104,11 +126,17 @@ final class MenuBarController: NSObject {
         }
         // 展开状态下（不管哪种）点 `<` 都是收回。
         if inlineState != .hidden {
+            let wasArranging = inlineState == .arranging
             setInline(.hidden)
+            if wasArranging { recordLayoutSoon() }
             return
         }
         if event?.modifierFlags.contains(.option) == true {
             setInline(.arranging)
+            return
+        }
+        if panelOnlyOnBuiltIn, let screen = toggleItem.button?.window?.screen, !MenuBarScanner.isBuiltIn(screen) {
+            setInline(.expanded)
         } else {
             openPanel()
         }
@@ -130,8 +158,9 @@ final class MenuBarController: NSObject {
 
         var items = MenuBarScanner.hiddenItems()
         Task {
-            // 没有缓存（首次授权后第一次打开）就只好等这一次扫完。
-            if axExtras.isEmpty {
+            // 没有缓存（首次授权后第一次打开），或者有图标对不上（挪动过后隐藏区的坐标全变了），就现场重扫。
+            let stale = axExtras.isEmpty || items.contains { AccessibilityIndex.match($0.bounds, in: axExtras) == nil }
+            if stale {
                 axExtras = await Task.detached(priority: .userInitiated) { AccessibilityIndex.scan() }.value
             }
             for i in items.indices {
@@ -140,6 +169,8 @@ final class MenuBarController: NSObject {
                     items[i].icon = extra.icon
                 }
             }
+            // 系统自带的项不该出现在隐藏区，布局管理器马上会把它们挪回去，面板里不列。
+            items.removeAll { LayoutManager.isSystemItem($0, extras: axExtras) }
             panel.showItems(items.map { ($0, $0.icon) }, notice: nil, anchor: anchor)
             // 顺手刷新缓存，下次更准（新启动的 App、变过位置的图标）。
             refreshAccessibilityIndex()
@@ -147,6 +178,34 @@ final class MenuBarController: NSObject {
     }
 
     func debugArrange() { setInline(.arranging) }
+
+    /// 调试用：把某个可见图标（比如系统的 Spotlight）挪进隐藏区，看会不会被挪回来。
+    func debugHide(appNamed name: String) {
+        axExtras = AccessibilityIndex.scan()
+        let items = MenuBarScanner.allStatusItems().filter { MenuBarScanner.isOnScreen($0.bounds) }
+        guard let item = items.first(where: { AccessibilityIndex.match($0.bounds, in: axExtras)?.appName == name }),
+              let separator = MenuBarScanner.separatorWindowID()
+        else { NSLog("CoffeeBar: no visible item for \(name)"); return }
+        Task {
+            let r = await ItemMover.move(windowID: item.windowID, ownerPID: item.ownerPID, toLeftOf: separator)
+            NSLog("CoffeeBar: hide test moved \(name) to \(String(describing: r))")
+        }
+    }
+
+    /// 调试用：把某个 App 的隐藏图标挪到可见区但不记录意图，看布局管理器会不会把它挪回去。
+    func debugDrift(appNamed name: String) {
+        var items = MenuBarScanner.hiddenItems()
+        axExtras = AccessibilityIndex.scan()
+        for i in items.indices {
+            if let extra = AccessibilityIndex.match(items[i].bounds, in: axExtras) { items[i].ownerName = extra.appName }
+        }
+        guard let item = items.first(where: { $0.ownerName == name }), let toggleWindowID else { return }
+        Task {
+            layoutManager.seedIfEmpty(extras: axExtras)
+            let r = await ItemMover.move(windowID: item.windowID, ownerPID: item.ownerPID, toLeftOf: toggleWindowID)
+            NSLog("CoffeeBar: drift test moved \(name) to \(String(describing: r))")
+        }
+    }
 
     /// `<` 按钮的窗口 ID。NSStatusBarButton 的 windowNumber 在 macOS 26 上可能拿不到（负数），
     /// 拿不到就从窗口列表里找：第一个在屏幕上、紧挨着分隔符右侧的状态项窗口。
@@ -325,8 +384,36 @@ final class MenuBarController: NSObject {
 
     private func applyInlineState() {
         separatorItem.length = inlineState == .hidden ? Self.hiddenLength : Self.shownLength
-        toggleItem.button?.image = NSImage(systemSymbolName: inlineState == .arranging ? "checkmark" : "chevron.left", accessibilityDescription: nil)
+        let symbol: String
+        switch inlineState {
+        case .hidden: symbol = "chevron.left"
+        case .arranging: symbol = "checkmark"
+        case .expanded: symbol = "chevron.right"
+        }
+        toggleItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         toggleItem.button?.toolTip = inlineState == .arranging ? "整理中：⌘ 拖动图标或 “/”，完成后点这里收回" : nil
+
+        if inlineState == .expanded {
+            if outsideClickMonitor == nil {
+                outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+                    guard let self, self.inlineState == .expanded else { return }
+                    if !Self.isInMenuBar(event.locationInWindow) {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { if self.inlineState == .expanded { self.setInline(.hidden) } }
+                    }
+                }
+            }
+        } else if let outsideClickMonitor {
+            NSEvent.removeMonitor(outsideClickMonitor)
+            self.outsideClickMonitor = nil
+        }
+    }
+
+    /// AppKit 屏幕坐标（原点左下）。菜单栏高度用 frame 和 visibleFrame 的差算，刘海屏也对。
+    private static func isInMenuBar(_ point: NSPoint) -> Bool {
+        NSScreen.screens.contains { screen in
+            point.x >= screen.frame.minX && point.x <= screen.frame.maxX
+                && point.y >= screen.visibleFrame.maxY - 2 && point.y <= screen.frame.maxY
+        }
     }
 
     // MARK: - 右键菜单
@@ -347,6 +434,11 @@ final class MenuBarController: NSObject {
         menu.addItem(arrange)
         menu.addItem(withTitle: "整理时 “/” 左边的图标会被隐藏，按住 ⌘ 拖动图标或 “/” 调整", action: nil, keyEquivalent: "")
         menu.addItem(.separator())
+        let builtIn = NSMenuItem(title: "只在内建屏使用面板（外接屏直接展开）", action: #selector(togglePanelOnlyOnBuiltIn), keyEquivalent: "")
+        builtIn.target = self
+        builtIn.state = panelOnlyOnBuiltIn ? .on : .off
+        menu.addItem(builtIn)
+        menu.addItem(.separator())
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
         menu.addItem(withTitle: "CoffeeBar \(version)", action: nil, keyEquivalent: "")
         if updater.isConfigured {
@@ -362,5 +454,19 @@ final class MenuBarController: NSObject {
 
     @objc private func finishArranging() {
         setInline(.hidden)
+        recordLayoutSoon()
+    }
+
+    /// 整理结束后把当前布局记为用户意图（等位置稳定一下）。
+    private func recordLayoutSoon() {
+        Task {
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            axExtras = await Task.detached(priority: .userInitiated) { AccessibilityIndex.scan() }.value
+            layoutManager.recordCurrent(extras: axExtras)
+        }
+    }
+
+    @objc private func togglePanelOnlyOnBuiltIn() {
+        panelOnlyOnBuiltIn.toggle()
     }
 }
