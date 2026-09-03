@@ -27,6 +27,14 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# ad-hoc 签名，让系统权限记录能稳定认出这个 App。
-codesign --force --sign - "$APP"
+# 签名身份决定系统权限记录认不认得这个 App：
+# ad-hoc 签名每次重新打包 cdhash 都变，权限会失效；有 Developer ID 就用它，身份固定。
+# 可以用 SIGN_IDENTITY 环境变量覆盖，传 "-" 强制 ad-hoc。
+if [ -z "${SIGN_IDENTITY:-}" ]; then
+  SIGN_IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+    | grep -o '"Developer ID Application[^"]*"' | head -1 | tr -d '"')
+  SIGN_IDENTITY="${SIGN_IDENTITY:--}"
+fi
+codesign --force --sign "$SIGN_IDENTITY" "$APP"
+echo "signed with: $SIGN_IDENTITY"
 echo "built $APP"
