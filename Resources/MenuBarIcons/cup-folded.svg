@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 44 36" width="44" height="36">
+  <!-- 折叠：实心杯子，把手在左（和 App 图标一致） -->
+  <path d="M13 11 H41 V19 C41 27.5 34.5 33 27 33 C19.5 33 13 27.5 13 19 Z" fill="#000"/>
+  <path d="M13.5 15 C5 14.5 4 26 13.5 26" fill="none" stroke="#000" stroke-width="4" stroke-linecap="round"/>
+  <ellipse cx="27" cy="11" rx="14" ry="3.2" fill="#000"/>
+</svg>

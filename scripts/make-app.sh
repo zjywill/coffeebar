@@ -37,10 +37,11 @@ SPARKLE_FW="$ROOT/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm
 cp -R "$SPARKLE_FW" "$APP/Contents/Frameworks/Sparkle.framework"
 install_name_tool -add_rpath @executable_path/../Frameworks "$APP/Contents/MacOS/CoffeeBar"
 
-# 本地化字符串。
+# 本地化字符串和菜单栏图标。
 for lproj in "$ROOT"/Resources/*.lproj; do
   cp -R "$lproj" "$APP/Contents/Resources/"
 done
+cp -R "$ROOT/Resources/MenuBarIcons" "$APP/Contents/Resources/"
 
 # 图标：Resources/CoffeeBar.icon 是 Icon Composer 格式，用 Xcode 的 actool 编译成 .icns + Assets.car。
 ICON_KEYS=""

@@ -146,7 +146,7 @@ final class DropPanel: NSPanel, NSTextFieldDelegate {
             column.addArrangedSubview(makeNotice(notice.text, buttons: notice.buttons))
         }
         if entries.isEmpty, notice == nil {
-            column.addArrangedSubview(makeLabel(L("No hidden items. Right-click “<” and choose “Arrange Items…”, then drag items to the left of “/” to hide them.")))
+            column.addArrangedSubview(makeLabel(L("No hidden items. ⌘-drag an item to the left of the cup to hide it.")))
         }
         if !entries.isEmpty {
             let searchRow = NSStackView()

@@ -13,7 +13,8 @@ import AppKit
 @MainActor
 final class MenuBarController: NSObject {
     private static let hiddenLength: CGFloat = 10_000
-    private static let shownLength: CGFloat = 12
+    /// 展开时分隔符宽度为 0（Ice / Thaw 的分隔符也是 0 宽），不占位、不留空隙。
+    private static let shownLength: CGFloat = 0
 
     /// expanded：外接宽屏上不用面板，直接展开，点菜单栏以外的地方自动收回。
     private enum InlineState { case hidden, arranging, expanded }
@@ -90,14 +91,15 @@ final class MenuBarController: NSObject {
         separatorItem.autosaveName = "CoffeeBar.separator"
 
         if let button = toggleItem.button {
-            button.image = NSImage(systemSymbolName: "chevron.left", accessibilityDescription: "Show hidden items")
+            button.image = Self.cupImage(unfolded: false)
             button.target = self
             button.action = #selector(toggleClicked(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
         if let button = separatorItem.button {
-            button.image = NSImage(systemSymbolName: "line.diagonal", accessibilityDescription: "Separator")
-            button.imagePosition = .imageOnly
+            // 分隔符不可见：它只是把左边的图标挤出屏幕的机制。
+            button.image = nil
+            button.title = ""
             button.isEnabled = false
             button.appearsDisabled = false
         }
@@ -177,7 +179,7 @@ final class MenuBarController: NSObject {
         if !Permissions.hasAccessibility {
             Permissions.requestAccessibility()
             panel.showItems([], notice: (
-                L("Accessibility permission is needed to identify and click hidden items. Grant it, then click “<” again."),
+                L("Accessibility permission is needed to identify and click hidden items. Grant it, then click the cup again."),
                 [(L("Open System Settings"), Permissions.openAccessibilitySettings)]
             ), anchor: anchor)
             return
@@ -537,16 +539,25 @@ final class MenuBarController: NSObject {
         applyInlineState()
     }
 
+    /// 菜单栏图标：手绘的 SVG 杯子（矢量，任何缩放都清晰），折叠 = 实心，展开 = 描边加热气。
+    /// 裸跑没有资源时退回 SF Symbols。
+    private static func cupImage(unfolded: Bool) -> NSImage? {
+        let name = unfolded ? "cup-unfolded" : "cup-folded"
+        if let url = Bundle.main.url(forResource: name, withExtension: "svg", subdirectory: "MenuBarIcons"),
+           let image = NSImage(contentsOf: url) {
+            image.isTemplate = true
+            image.size = NSSize(width: 22, height: 18)
+            return image
+        }
+        return NSImage(systemSymbolName: unfolded ? "cup.and.saucer" : "cup.and.saucer.fill", accessibilityDescription: nil)
+    }
+
     private func applyInlineState() {
         separatorItem.length = inlineState == .hidden ? Self.hiddenLength : Self.shownLength
-        let symbol: String
-        switch inlineState {
-        case .hidden: symbol = "chevron.left"
-        case .arranging: symbol = "checkmark"
-        case .expanded: symbol = "chevron.right"
-        }
-        toggleItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
-        toggleItem.button?.toolTip = inlineState == .arranging ? L("Arranging: ⌘-drag items or “/”, then click here to finish") : nil
+        toggleItem.button?.image = inlineState == .arranging
+            ? NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)
+            : Self.cupImage(unfolded: inlineState != .hidden)
+        toggleItem.button?.toolTip = inlineState == .arranging ? L("Arranging: ⌘-drag items left of the cup to hide them, then click the cup to finish") : nil
 
         if inlineState == .expanded {
             if outsideClickMonitor == nil {
@@ -587,9 +598,9 @@ final class MenuBarController: NSObject {
         arrange.target = self
         arrange.action = inlineState == .arranging ? #selector(finishArranging) : #selector(startArranging)
         menu.addItem(arrange)
-        menu.addItem(withTitle: L("Click “<” to expand or collapse. ⌘-drag items or “/” to rearrange; items left of “/” are hidden."), action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: L("Click the cup to expand or collapse. ⌘-drag an item left of the cup to hide it, right of it to keep it visible."), action: nil, keyEquivalent: "")
         menu.addItem(.separator())
-        let panelItem = NSMenuItem(title: L("Click “<” opens the panel instead of expanding the menu bar"), action: #selector(toggleClickOpensPanel), keyEquivalent: "")
+        let panelItem = NSMenuItem(title: L("Clicking the cup opens the panel instead of expanding the menu bar"), action: #selector(toggleClickOpensPanel), keyEquivalent: "")
         panelItem.target = self
         panelItem.state = clickOpensPanel ? .on : .off
         menu.addItem(panelItem)
