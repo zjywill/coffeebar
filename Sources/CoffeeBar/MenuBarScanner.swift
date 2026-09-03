@@ -48,6 +48,19 @@ enum MenuBarScanner {
         allStatusItems().filter { !isOnScreen($0.bounds) }
     }
 
+    /// 某个进程当前在屏幕上的窗口及其层级。用来判断点击之后有没有弹出菜单 / 弹窗。
+    static func onScreenWindows(ownedBy pid: pid_t) -> [CGWindowID: Int] {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else { return [:] }
+        var result: [CGWindowID: Int] = [:]
+        for info in list {
+            guard let owner = info[kCGWindowOwnerPID as String] as? pid_t, owner == pid,
+                  let number = info[kCGWindowNumber as String] as? Int
+            else { continue }
+            result[CGWindowID(number)] = info[kCGWindowLayer as String] as? Int ?? 0
+        }
+        return result
+    }
+
     static func bounds(of windowID: CGWindowID) -> CGRect? {
         guard let list = CGWindowListCopyWindowInfo(.optionIncludingWindow, windowID) as? [[String: Any]],
               let info = list.first,

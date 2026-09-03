@@ -178,7 +178,21 @@ final class MenuBarController: NSObject {
             }
             try? await Task.sleep(nanoseconds: 50_000_000)
             NSLog("CoffeeBar: click \(item.ownerName) at \(target) after \(Int(Date().timeIntervalSince(started) * 1000)) ms")
+            let targetApp = extra.flatMap { NSRunningApplication(processIdentifier: $0.pid) }
+            let before = extra.map { MenuBarScanner.onScreenWindows(ownedBy: $0.pid) } ?? [:]
             ClickForwarder.click(at: CGPoint(x: target.midX, y: target.midY), rightButton: rightButton)
+
+            // macOS 14 起 App 只有在收到真实用户输入后才能激活自己，合成点击不算，
+            // 所以"点图标就把窗口带到前台"的 App（没有菜单的那种）会被系统拒绝。
+            // 点完看一眼：目标 App 弹出了菜单 / 弹窗就不打扰；什么都没弹，就替它激活。
+            guard let extra, let targetApp else { return }
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            let after = MenuBarScanner.onScreenWindows(ownedBy: extra.pid)
+            let poppedUp = after.contains { id, layer in before[id] == nil && layer > 0 }
+            if !poppedUp, !targetApp.isActive {
+                NSLog("CoffeeBar: no popup from \(item.ownerName), activating it")
+                targetApp.activate()
+            }
         }
     }
 
