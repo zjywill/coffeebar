@@ -2,6 +2,7 @@
 # 打包成 CoffeeBar.app。屏幕录制 / 辅助功能权限是按 .app 授的，裸二进制会把权限授给 Terminal。
 set -euo pipefail
 cd "$(dirname "$0")/.."
+ROOT="$(pwd -P)"
 
 swift build -c release
 APP=build/CoffeeBar.app
@@ -9,7 +10,24 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp .build/release/CoffeeBar "$APP/Contents/MacOS/CoffeeBar"
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+# 图标：Resources/CoffeeBar.icon 是 Icon Composer 格式，用 Xcode 的 actool 编译成 .icns + Assets.car。
+ICON_KEYS=""
+if xcrun --find actool >/dev/null 2>&1; then
+  mkdir -p "$APP/Contents/Resources"
+  # actool 按 PWD 环境变量解析相对路径，这里一律用绝对路径。
+  xcrun actool "$ROOT/Resources/CoffeeBar.icon" \
+    --compile "$ROOT/$APP/Contents/Resources" \
+    --platform macosx --minimum-deployment-target 26.0 \
+    --app-icon CoffeeBar \
+    --output-partial-info-plist /dev/null \
+    --output-format human-readable-text >/dev/null
+  ICON_KEYS='    <key>CFBundleIconFile</key><string>CoffeeBar</string>
+    <key>CFBundleIconName</key><string>CoffeeBar</string>'
+else
+  echo "warning: actool not found (install Xcode), skipping app icon" >&2
+fi
+
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -23,6 +41,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>
+$ICON_KEYS
 </dict>
 </plist>
 PLIST
