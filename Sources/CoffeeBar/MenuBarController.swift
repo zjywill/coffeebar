@@ -320,9 +320,24 @@ final class MenuBarController: NSObject {
         try? await Task.sleep(nanoseconds: 50_000_000)
 
         let before = context.pid.map { MenuBarScanner.onScreenWindows(ownedBy: $0) } ?? [:]
-        NSLog("CoffeeBar: click \(item.ownerName) at \(target)")
-        ClickForwarder.click(at: CGPoint(x: target.midX, y: target.midY), rightButton: rightButton,
-                             windowID: item.windowID, ownerPID: item.ownerPID, targetPID: extra?.pid)
+        // 左键优先走辅助功能 AXPress：完全不碰鼠标。不支持的 App 再合成鼠标点击（光标会闪一下）。
+        var pressed = false
+        if !rightButton, let extra, ProcessInfo.processInfo.environment["COFFEEBAR_NO_AXPRESS"] == nil {
+            pressed = await Task.detached { AccessibilityIndex.press(extra) }.value
+            if pressed {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                // 返回成功但什么都没弹出来也算失败（有的 App 会这样），退回鼠标点击。
+                let popped = context.pid.map { MenuBarScanner.onScreenWindows(ownedBy: $0) }?.contains { before[$0.key] == nil } ?? false
+                let activated = context.pid.flatMap { NSRunningApplication(processIdentifier: $0)?.isActive } ?? false
+                pressed = popped || activated
+                NSLog("CoffeeBar: AXPress \(item.ownerName) -> popped=\(popped) activated=\(activated)")
+            }
+        }
+        if !pressed {
+            NSLog("CoffeeBar: click \(item.ownerName) at \(target)")
+            ClickForwarder.click(at: CGPoint(x: target.midX, y: target.midY), rightButton: rightButton,
+                                 windowID: item.windowID, ownerPID: item.ownerPID, targetPID: extra?.pid)
+        }
 
         guard let pid = context.pid, let targetApp = NSRunningApplication(processIdentifier: pid) else {
             scheduleRehide(after: 1)

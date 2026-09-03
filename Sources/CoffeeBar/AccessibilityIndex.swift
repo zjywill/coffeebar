@@ -57,6 +57,8 @@ enum AccessibilityIndex {
     }
 
     static func press(_ extra: AXMenuExtra) -> Bool {
+        // 有些 App 按下后要等菜单关闭才返回，别让它卡住我们：超时就当失败，走鼠标点击兜底。
+        AXUIElementSetMessagingTimeout(extra.element, 0.3)
         let result = AXUIElementPerformAction(extra.element, kAXPressAction as CFString)
         if result != .success { NSLog("CoffeeBar: AXPress \(extra.appName) failed: \(result.rawValue)") }
         return result == .success

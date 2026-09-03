@@ -29,8 +29,18 @@ enum ClickForwarder {
 
         // 事件里写目标窗口 / 进程字段会让菜单栏不再响应（0.2.0 的裸事件是通的），默认不写。
         let withFields = ProcessInfo.processInfo.environment["COFFEEBAR_CLICK_FIELDS"] != nil
+        let sentinelWindow = ProcessInfo.processInfo.environment["COFFEEBAR_SENTINEL"] != nil
         func make(_ type: CGEventType) -> CGEvent? {
             guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: button) else { return nil }
+            if sentinelWindow {
+                // macOS 26：App 自己看到的状态项窗口号是 2^32 这个哨兵值。
+                let w: Int64 = 4_294_967_296
+                event.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: w)
+                event.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: w)
+                event.setIntegerValueField(CGEventField(rawValue: 0x33)!, value: w)
+                event.setIntegerValueField(.mouseEventClickState, value: 1)
+                return event
+            }
             guard withFields else { return event }
             if let windowID {
                 event.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(windowID))
@@ -44,10 +54,13 @@ enum ClickForwarder {
         let cursor = CGEvent(source: nil)?.location ?? point
         NSLog("CoffeeBar: click mode=\(mode) cursor was \(cursor)")
 
-        if mode == "pid", let targetPID {
-            make(downType)?.postToPid(targetPID)
+        if mode == "pid" {
+            let which = ProcessInfo.processInfo.environment["COFFEEBAR_PID_TARGET"] ?? "app"
+            let pids: [pid_t] = which == "owner" ? [ownerPID].compactMap { $0 } : which == "both" ? [targetPID, ownerPID].compactMap { $0 } : [targetPID].compactMap { $0 }
+            NSLog("CoffeeBar: postToPid \(pids) fields=\(withFields)")
+            for pid in pids { make(downType)?.postToPid(pid) }
             usleep(40_000)
-            make(upType)?.postToPid(targetPID)
+            for pid in pids { make(upType)?.postToPid(pid) }
             return
         }
 
