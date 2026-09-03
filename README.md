@@ -45,3 +45,7 @@ defaults delete com.zjywill.coffeebar
 ## 要求
 
 macOS 14+，Swift 5.9+。在 macOS 26 上开发验证。
+
+## 许可证
+
+AGPL-3.0，见 [LICENSE](LICENSE)。
