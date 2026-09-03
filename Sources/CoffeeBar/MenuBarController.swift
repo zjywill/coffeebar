@@ -552,8 +552,29 @@ final class MenuBarController: NSObject {
         return NSImage(systemSymbolName: unfolded ? "cup.and.saucer" : "cup.and.saucer.fill", accessibilityDescription: nil)
     }
 
+    private static let separatorPositionKey = "NSStatusItem Preferred Position CoffeeBar.separator"
+    private var savedSeparatorPosition: Any?
+
     private func applyInlineState() {
-        separatorItem.length = inlineState == .hidden ? Self.hiddenLength : Self.shownLength
+        // 展开时把分隔符整个从菜单栏拿掉（状态项再窄 macOS 也留 16 点内边距，会留出空隙）。
+        // 收起时先把保存的位置写回、以 0 宽放回原槽位、等它落位，再撑大。
+        if inlineState == .hidden {
+            if !separatorItem.isVisible {
+                if let saved = savedSeparatorPosition { UserDefaults.standard.set(saved, forKey: Self.separatorPositionKey) }
+                separatorItem.length = 0
+                separatorItem.isVisible = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                    guard let self, self.inlineState == .hidden else { return }
+                    self.separatorItem.length = Self.hiddenLength
+                }
+            } else {
+                separatorItem.length = Self.hiddenLength
+            }
+        } else if separatorItem.isVisible {
+            separatorItem.length = 0
+            savedSeparatorPosition = UserDefaults.standard.object(forKey: Self.separatorPositionKey)
+            separatorItem.isVisible = false
+        }
         toggleItem.button?.image = inlineState == .arranging
             ? NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)
             : Self.cupImage(unfolded: inlineState != .hidden)

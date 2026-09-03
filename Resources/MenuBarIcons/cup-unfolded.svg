@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 44 36" width="44" height="36">
-  <!-- 展开：描边杯子 + 热气 -->
-  <path d="M13 11 H41 V19 C41 27.5 34.5 33 27 33 C19.5 33 13 27.5 13 19 Z" fill="none" stroke="#000" stroke-width="3" stroke-linejoin="round"/>
-  <path d="M13.5 15 C5 14.5 4 26 13.5 26" fill="none" stroke="#000" stroke-width="3" stroke-linecap="round"/>
-  <ellipse cx="27" cy="11" rx="14" ry="3.2" fill="none" stroke="#000" stroke-width="2.6"/>
-  <path d="M22 7 C22 4.5 24 4.5 24 2" fill="none" stroke="#000" stroke-width="2.4" stroke-linecap="round"/>
-  <path d="M32 7 C32 4.5 34 4.5 34 2" fill="none" stroke="#000" stroke-width="2.4" stroke-linecap="round"/>
+  <!-- 展开：描边杯子 + 热气。杯身和折叠态同位置，热气占上方，整体略上移保持视觉居中。 -->
+  <path d="M13 10 H41 V18 C41 26 34.5 31.5 27 31.5 C19.5 31.5 13 26 13 18 Z" fill="none" stroke="#000" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M13.5 14 C5 13.5 4 25 13.5 25" fill="none" stroke="#000" stroke-width="3" stroke-linecap="round"/>
+  <ellipse cx="27" cy="10" rx="14" ry="3.2" fill="none" stroke="#000" stroke-width="2.6"/>
+  <path d="M22 6 C22 4 24 4 24 2" fill="none" stroke="#000" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M32 6 C32 4 34 4 34 2" fill="none" stroke="#000" stroke-width="2.4" stroke-linecap="round"/>
 </svg>
