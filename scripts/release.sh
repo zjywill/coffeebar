@@ -41,8 +41,10 @@ fi
 # ---- 1. 打包（通用二进制 + hardened runtime）----------------------------------
 HARDENED_RUNTIME=1 COFFEEBAR_FEED_URL="$FEED_URL" scripts/make-app.sh
 APP="$ROOT/build/CoffeeBar.app"
-codesign -dv --verbose=4 "$APP" 2>&1 | grep -q 'Authority=Developer ID Application' || die "not signed with Developer ID"
-codesign -dv --verbose=4 "$APP" 2>&1 | grep -q 'flags=.*runtime' || die "hardened runtime missing"
+# 先存进变量再匹配：pipefail 下 grep -q 提前退出会让 codesign 吃 SIGPIPE，整条管道判失败。
+SIGN_INFO=$(codesign -dv --verbose=4 "$APP" 2>&1)
+grep -q 'Authority=Developer ID Application' <<< "$SIGN_INFO" || die "not signed with Developer ID"
+grep -q 'flags=.*runtime' <<< "$SIGN_INFO" || die "hardened runtime missing"
 BUILD_NUMBER=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP/Contents/Info.plist")
 
 # ---- 2. 公证 + staple ---------------------------------------------------------
