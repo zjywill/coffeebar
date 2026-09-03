@@ -15,6 +15,7 @@ final class MenuBarController: NSObject {
     private let toggleItem: NSStatusItem
     private let separatorItem: NSStatusItem
     private let panel = DropPanel()
+    private let updater = UpdateController()
 
     private var isInlineShown = false
     /// 上次打开面板时扫到的辅助功能索引，点击兜底时用。
@@ -228,11 +229,22 @@ final class MenuBarController: NSObject {
 
     // MARK: - 右键菜单
 
+    @objc private func checkForUpdates() {
+        updater.checkForUpdates()
+    }
+
     private func showContextMenu() {
         let menu = NSMenu()
         menu.addItem(withTitle: "“/” 左边的图标会被隐藏，按住 ⌘ 拖动图标或 “/” 调整", action: nil, keyEquivalent: "")
         menu.addItem(withTitle: "左键：弹出面板    ⌥+左键：在菜单栏内展开", action: nil, keyEquivalent: "")
         menu.addItem(.separator())
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        menu.addItem(withTitle: "CoffeeBar \(version)", action: nil, keyEquivalent: "")
+        if updater.isConfigured {
+            let check = NSMenuItem(title: "检查更新…", action: #selector(checkForUpdates), keyEquivalent: "")
+            check.target = self
+            menu.addItem(check)
+        }
         menu.addItem(withTitle: "退出 CoffeeBar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         toggleItem.menu = menu
         toggleItem.button?.performClick(nil)
