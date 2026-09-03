@@ -171,6 +171,14 @@ final class MenuBarController: NSObject {
             }
             // 系统自带的项不该出现在隐藏区，布局管理器马上会把它们挪回去，面板里不列。
             items.removeAll { LayoutManager.isSystemItem($0, extras: axExtras) }
+            // macOS 15 及更早：控制中心为所有未显示的模块保留屏幕外窗口，它们对不上任何 App，
+            // 不是真的隐藏图标，别列出来。macOS 26 起所有图标窗口都归控制中心，不能这么过滤。
+            if ProcessInfo.processInfo.operatingSystemVersion.majorVersion < 26 {
+                items.removeAll { item in
+                    AccessibilityIndex.match(item.bounds, in: axExtras) == nil
+                        && NSRunningApplication(processIdentifier: item.ownerPID)?.bundleIdentifier == "com.apple.controlcenter"
+                }
+            }
             panel.showItems(items.map { ($0, $0.icon) }, notice: nil, anchor: anchor)
             // 顺手刷新缓存，下次更准（新启动的 App、变过位置的图标）。
             refreshAccessibilityIndex()
@@ -313,7 +321,8 @@ final class MenuBarController: NSObject {
 
         let before = context.pid.map { MenuBarScanner.onScreenWindows(ownedBy: $0) } ?? [:]
         NSLog("CoffeeBar: click \(item.ownerName) at \(target)")
-        ClickForwarder.click(at: CGPoint(x: target.midX, y: target.midY), rightButton: rightButton)
+        ClickForwarder.click(at: CGPoint(x: target.midX, y: target.midY), rightButton: rightButton,
+                             windowID: item.windowID, ownerPID: item.ownerPID, targetPID: extra?.pid)
 
         guard let pid = context.pid, let targetApp = NSRunningApplication(processIdentifier: pid) else {
             scheduleRehide(after: 1)

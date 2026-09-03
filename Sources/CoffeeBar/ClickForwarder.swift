@@ -16,27 +16,62 @@ enum ClickForwarder {
         return nil
     }
 
-    /// 在屏幕坐标（CG 坐标系）合成一次点击。
-    /// 给了 pid 就直接投递给那个进程（绕过窗口服务器的命中测试和坐标映射），否则走 HID 事件流。
-    static func click(at point: CGPoint, rightButton: Bool, pid: pid_t? = nil) {
+    /// 在屏幕坐标（CG 坐标系）合成一次点击，点完立刻把光标挪回原处。
+    ///
+    /// 鼠标事件会把光标带到图标上，所以点完马上 warp 回去，用户只看到一闪。
+    /// 注意不能用 CGDisplayHideCursor 把光标藏起来：一藏，刚弹出的状态项菜单就会被关掉。
+    static func click(at point: CGPoint, rightButton: Bool, windowID: CGWindowID? = nil, ownerPID: pid_t? = nil, targetPID: pid_t? = nil) {
         let source = CGEventSource(stateID: .hidSystemState)
         let button: CGMouseButton = rightButton ? .right : .left
         let downType: CGEventType = rightButton ? .rightMouseDown : .leftMouseDown
         let upType: CGEventType = rightButton ? .rightMouseUp : .leftMouseUp
-        // 先发一个 mouseMoved 把光标挪过去：只 warp 光标不发事件的话，菜单栏收不到悬停，
-        // 随后的 mouseDown 会被当成落在别处而丢掉。
-        CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: button)?.post(tap: .cghidEventTap)
-        usleep(60_000)
-        let down = CGEvent(mouseEventSource: source, mouseType: downType, mouseCursorPosition: point, mouseButton: button)
-        let up = CGEvent(mouseEventSource: source, mouseType: upType, mouseCursorPosition: point, mouseButton: button)
-        if let pid {
-            down?.postToPid(pid)
-            usleep(40_000)
-            up?.postToPid(pid)
-        } else {
-            down?.post(tap: .cghidEventTap)
-            usleep(40_000)
-            up?.post(tap: .cghidEventTap)
+        let mode = ProcessInfo.processInfo.environment["COFFEEBAR_CLICK_MODE"] ?? "hid"
+
+        // 事件里写目标窗口 / 进程字段会让菜单栏不再响应（0.2.0 的裸事件是通的），默认不写。
+        let withFields = ProcessInfo.processInfo.environment["COFFEEBAR_CLICK_FIELDS"] != nil
+        func make(_ type: CGEventType) -> CGEvent? {
+            guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: button) else { return nil }
+            guard withFields else { return event }
+            if let windowID {
+                event.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(windowID))
+                event.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(windowID))
+                event.setIntegerValueField(CGEventField(rawValue: 0x33)!, value: Int64(windowID))
+            }
+            if let ownerPID { event.setIntegerValueField(.eventTargetUnixProcessID, value: Int64(ownerPID)) }
+            event.setIntegerValueField(.mouseEventClickState, value: 1)
+            return event
         }
+        let cursor = CGEvent(source: nil)?.location ?? point
+        NSLog("CoffeeBar: click mode=\(mode) cursor was \(cursor)")
+
+        if mode == "pid", let targetPID {
+            make(downType)?.postToPid(targetPID)
+            usleep(40_000)
+            make(upType)?.postToPid(targetPID)
+            return
+        }
+
+        let restore = ProcessInfo.processInfo.environment["COFFEEBAR_NO_RESTORE"] == nil
+        let restoreMode = ProcessInfo.processInfo.environment["COFFEEBAR_RESTORE_MODE"] ?? "warp"
+        let useHide = restore && restoreMode != "warp" && restoreMode != "delayed"
+        let useWarp = restore && restoreMode != "hide"
+        if useHide { CGDisplayHideCursor(CGMainDisplayID()) }
+        if mode == "session" {
+            make(.mouseMoved)?.post(tap: .cgSessionEventTap)
+            usleep(60_000)
+            make(downType)?.post(tap: .cgSessionEventTap)
+            usleep(40_000)
+            make(upType)?.post(tap: .cgSessionEventTap)
+        } else {
+            make(.mouseMoved)?.post(tap: .cghidEventTap)
+            usleep(60_000)
+            make(downType)?.post(tap: .cghidEventTap)
+            usleep(40_000)
+            make(upType)?.post(tap: .cghidEventTap)
+        }
+        guard restore else { return }
+        usleep(restoreMode == "delayed" ? 400_000 : 30_000)
+        if useWarp { CGWarpMouseCursorPosition(cursor) }
+        if useHide { CGDisplayShowCursor(CGMainDisplayID()) }
     }
 }
