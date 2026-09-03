@@ -61,7 +61,7 @@ enum AccessibilityIndex {
     /// 2. 先 AXShowMenu 再 AXPress。动作超时不等于失败：菜单一打开 App 就进入模态跟踪循环，
     ///    答不了辅助功能消息，恰恰是成功的那次会超时。所以每步之后看图标有没有反应，有就停，
     ///    否则再按一次会把刚打开的菜单关掉。
-    static func activate(item: MenuBarItem, extra: AXMenuExtra?, reacted: () -> Bool) -> Bool {
+    static func activate(item: MenuBarItem, extra: AXMenuExtra?, reacted: () -> Bool, trustExtra: Bool = false) -> Bool {
         let center = CGPoint(x: item.bounds.midX, y: item.bounds.midY)
         var element: AXUIElement?
         let systemWide = AXUIElementCreateSystemWide()
@@ -75,9 +75,9 @@ enum AccessibilityIndex {
         guard let element else { return false }
         AXUIElementSetMessagingTimeout(element, 0.25)
         guard let frame = frame(of: element), frame.insetBy(dx: -10, dy: -10).intersects(item.bounds) else {
-            NSLog("CoffeeBar: AX element frame mismatch for \(item.ownerName)")
             return false
         }
+        _ = trustExtra
         for action in [kAXShowMenuAction, kAXPressAction] {
             let result = AXUIElementPerformAction(element, action as CFString)
             if result == .success { NSLog("CoffeeBar: \(action) accepted by \(item.ownerName)"); return true }

@@ -311,16 +311,9 @@ final class MenuBarController: NSObject {
             tempShown.append(context)
         }
 
-        // 窗口挪好了，App 自己的坐标还要过一会儿才更新，等它也回到屏幕上再点。
+        // 窗口挪好了。辅助功能激活不依赖坐标，立刻按，让图标出现和高亮几乎同时发生；
+        // 只有退回鼠标点击时才需要等 App 自己的坐标更新。
         var target = MenuBarScanner.bounds(of: item.windowID) ?? item.bounds
-        if let extra, let axFrame = await AccessibilityIndex.waitUntilOnScreen(extra) {
-            target = axFrame
-        } else {
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            target = MenuBarScanner.bounds(of: item.windowID) ?? target
-        }
-        try? await Task.sleep(nanoseconds: 50_000_000)
-
         let before = context.pid.map { MenuBarScanner.onScreenWindows(ownedBy: $0) } ?? [:]
         // 左键优先走辅助功能：完全不碰鼠标。不支持的 App 再合成鼠标点击。
         var pressed = false
@@ -334,7 +327,15 @@ final class MenuBarController: NSObject {
             }
             var live = item
             live.bounds = startBounds
-            pressed = AccessibilityIndex.activate(item: live, extra: extra, reacted: reacted)
+            // 图标刚挪进来，App 自己的坐标要过一会儿才更新；每 30 毫秒试一次，坐标一就绪立即按。
+            let t0 = Date()
+            for attempt in 0..<10 {
+                live.bounds = MenuBarScanner.bounds(of: item.windowID) ?? live.bounds
+                pressed = AccessibilityIndex.activate(item: live, extra: extra, reacted: reacted)
+                if pressed || reacted() { break }
+                if attempt < 9 { try? await Task.sleep(nanoseconds: 30_000_000) }
+            }
+            NSLog("CoffeeBar: AX activation attempt loop took \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
             if pressed {
                 // 再等一小会儿确认真的有反应；辅助功能"接受"了但什么都没弹的也退回鼠标点击。
                 var ok = false
@@ -349,6 +350,13 @@ final class MenuBarController: NSObject {
             }
         }
         if !pressed {
+            // 退回鼠标点击：这时才需要等 App 自己的坐标也回到屏幕上，否则点击会穿到下面的窗口。
+            if let extra, let axFrame = await AccessibilityIndex.waitUntilOnScreen(extra) {
+                target = axFrame
+            } else {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                target = MenuBarScanner.bounds(of: item.windowID) ?? target
+            }
             NSLog("CoffeeBar: click \(item.ownerName) at \(target)")
             ClickForwarder.click(at: CGPoint(x: target.midX, y: target.midY), rightButton: rightButton,
                                  windowID: item.windowID, ownerPID: item.ownerPID, targetPID: extra?.pid)

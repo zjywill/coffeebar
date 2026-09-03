@@ -25,11 +25,12 @@ enum ItemMover {
         return event
     }
 
+    /// 1 毫秒轮询：按下之后图标窗口会跳到按下点，抬起越快越不容易被看到。
     private static func waitForFrameChange(of windowID: CGWindowID, from old: CGRect, timeout: TimeInterval) async -> CGRect? {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if let now = MenuBarScanner.bounds(of: windowID), now != old { return now }
-            try? await Task.sleep(nanoseconds: 10_000_000)
+            try? await Task.sleep(nanoseconds: 1_000_000)
         }
         return nil
     }
@@ -66,10 +67,11 @@ enum ItemMover {
         }
         source.localEventsSuppressionInterval = 0
 
+        let t0 = Date()
+        if !stayPut { CGDisplayHideCursor(CGMainDisplayID()) }
         down.post(tap: .cgSessionEventTap)
         let afterDown = await waitForFrameChange(of: windowID, from: itemFrame, timeout: 0.3)
-
-        if !stayPut { CGDisplayHideCursor(CGMainDisplayID()) }
+        let t1 = Date()
         up.post(tap: .cgSessionEventTap)
         let afterUp = await waitForFrameChange(of: windowID, from: afterDown ?? itemFrame, timeout: 0.5)
         if !stayPut {
@@ -77,7 +79,7 @@ enum ItemMover {
             CGAssociateMouseAndMouseCursorPosition(1) // 解除 warp 之后系统对物理鼠标移动的短暂压制，否则会有"鼠标卡一下"的感觉
             CGDisplayShowCursor(CGMainDisplayID())
         }
-        NSLog("CoffeeBar: move \(windowID) \(stayPut ? "(cursor untouched)" : "(cursor hidden at drop)"): \(itemFrame) -> \(String(describing: afterUp ?? afterDown))")
+        NSLog("CoffeeBar: move \(windowID) \(stayPut ? "(cursor untouched)" : "(cursor hidden at drop)"): \(itemFrame) -> \(String(describing: afterUp ?? afterDown)) down-wait \(Int(t1.timeIntervalSince(t0) * 1000))ms total \(Int(Date().timeIntervalSince(t0) * 1000))ms")
         return afterUp ?? afterDown
     }
 }
