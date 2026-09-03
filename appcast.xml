@@ -3,12 +3,12 @@
     <channel>
         <title>CoffeeBar</title>
         <item>
-            <title>0.5.0</title>
-            <pubDate>Thu, 03 Sep 2026 16:35:38 +0800</pubDate>
-            <sparkle:version>48</sparkle:version>
-            <sparkle:shortVersionString>0.5.0</sparkle:shortVersionString>
+            <title>0.5.1</title>
+            <pubDate>Thu, 03 Sep 2026 16:46:25 +0800</pubDate>
+            <sparkle:version>50</sparkle:version>
+            <sparkle:shortVersionString>0.5.1</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/zjywill/coffeebar/releases/download/v0.5.0/CoffeeBar-0.5.0.zip" length="3801062" type="application/octet-stream" sparkle:edSignature="amsfbyY6ZkoElkQ7+DNEZlJ+gApc3I7BU5w4KUgqBiq0bNHr6z0k0Y29oN+4Qcwf/gsOFhpItAAGB5YEm4G7Dw=="/>
+            <enclosure url="https://github.com/zjywill/coffeebar/releases/download/v0.5.1/CoffeeBar-0.5.1.zip" length="3804007" type="application/octet-stream" sparkle:edSignature="PCJpNr2jseEX0qDMP1ji0Jd/BzWn+kwvf3/nw1tcbAMwr/tqqVEzhG93IAGPSR29+HwTSvRsa2e1v8nhmVEuDg=="/>
         </item>
     </channel>
 </rss>
