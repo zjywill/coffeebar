@@ -41,11 +41,12 @@ enum ItemMover {
             return nil
         }
 
-        // 落点：屏幕内的目标往指定一侧偏半个图标宽（正好落在边缘时窗口服务器会排到右边）；
-        // 屏幕外的目标用边缘本身，能精确回到原来的槽位。y 用目标的中线（Thaw 对屏幕外目标也这样，避免落进热角）。
+        // 落点照 Thaw：就是目标的边缘（x = minX 或 maxX），屏幕内的目标用顶边 y，屏幕外的用中线 y。
+        // 不要再往外偏移：偏出去的点会落进旁边几千点宽的分隔符窗口里，窗口服务器先按坐标排一次、
+        // 再按事件里的目标窗口字段纠正一次，图标就会"出现、消失、再出现"闪一帧。
         let targetOnScreen = MenuBarScanner.isOnScreen(targetFrame)
-        let sideOffset = targetOnScreen ? (itemFrame.width / 2 + 4) * (rightSide ? 1 : -1) : 0
-        let point = CGPoint(x: (rightSide ? targetFrame.maxX : targetFrame.minX) + sideOffset + xOffset, y: targetFrame.midY)
+        let point = CGPoint(x: (rightSide ? targetFrame.maxX : targetFrame.minX) + xOffset,
+                            y: targetOnScreen ? targetFrame.minY : targetFrame.midY)
         let pointOnScreen = MenuBarScanner.isOnScreen(CGRect(origin: point, size: CGSize(width: 1, height: 1)))
 
         guard let down = event(.leftMouseDown, at: point, windowID: windowID, pid: ownerPID, flags: .maskCommand, source: source),

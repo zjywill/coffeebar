@@ -359,7 +359,23 @@ final class MenuBarController: NSObject {
             tempShown.append(context)
         }
 
+        // Thaw 的 waitForItemPositionToSettle：图标挪进来后等它的位置稳定（至少 250 毫秒）再动作，
+        // 太急会撞上窗口服务器还在整理菜单栏的瞬间，出现一帧"出现、消失、再出现"。
+        await waitForPositionToSettle(of: item.windowID, minimum: 0.25)
         await activateOnScreen(item, extra: extra, rightButton: rightButton, rehide: true)
+    }
+
+    private func waitForPositionToSettle(of windowID: CGWindowID, minimum: TimeInterval) async {
+        let start = Date()
+        var last = MenuBarScanner.bounds(of: windowID)
+        var stable = 0
+        while Date().timeIntervalSince(start) < 1.0 {
+            try? await Task.sleep(nanoseconds: 25_000_000)
+            let now = MenuBarScanner.bounds(of: windowID)
+            stable = (now == last) ? stable + 1 : 0
+            last = now
+            if stable >= 3 && Date().timeIntervalSince(start) >= minimum { break }
+        }
     }
 
     /// 图标已经在屏幕上了：用辅助功能按它，按 App 学到的方式决定要不要真实点击，
