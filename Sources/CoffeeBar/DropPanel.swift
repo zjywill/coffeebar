@@ -1,19 +1,32 @@
 import AppKit
 
-/// 面板里的一个图标：显示截图，左键 / 右键都转发。
+/// 面板里的一个图标：有截图就显示截图，没有就显示 App 名字。左键 / 右键都转发。
 final class ItemView: NSView {
     let item: MenuBarItem
-    private let image: NSImage
+    private let image: NSImage?
     private var hovered = false { didSet { needsDisplay = true } }
     var onClick: ((MenuBarItem, Bool) -> Void)?
 
-    init(item: MenuBarItem, image: NSImage) {
+    private static let labelAttributes: [NSAttributedString.Key: Any] = [
+        .font: NSFont.systemFont(ofSize: 12),
+        .foregroundColor: NSColor.labelColor,
+    ]
+
+    let itemWidth: CGFloat
+
+    init(item: MenuBarItem, image: NSImage?) {
         self.item = item
         self.image = image
-        super.init(frame: NSRect(origin: .zero, size: item.bounds.size))
+        if image != nil {
+            itemWidth = item.bounds.width
+        } else {
+            let textWidth = (item.ownerName as NSString).size(withAttributes: Self.labelAttributes).width
+            itemWidth = ceil(textWidth) + 16
+        }
+        super.init(frame: NSRect(x: 0, y: 0, width: itemWidth, height: item.bounds.height))
         toolTip = item.ownerName
         translatesAutoresizingMaskIntoConstraints = false
-        widthAnchor.constraint(equalToConstant: item.bounds.width).isActive = true
+        widthAnchor.constraint(equalToConstant: itemWidth).isActive = true
         heightAnchor.constraint(equalToConstant: item.bounds.height).isActive = true
     }
 
@@ -37,7 +50,14 @@ final class ItemView: NSView {
             NSColor.controlAccentColor.withAlphaComponent(0.25).setFill()
             NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
         }
-        image.draw(in: bounds)
+        if let image {
+            image.draw(in: bounds)
+        } else {
+            let text = item.ownerName as NSString
+            let size = text.size(withAttributes: Self.labelAttributes)
+            text.draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2),
+                      withAttributes: Self.labelAttributes)
+        }
     }
 }
 
@@ -62,7 +82,7 @@ final class DropPanel: NSPanel {
 
     // MARK: - 内容
 
-    func showItems(_ entries: [(MenuBarItem, NSImage)], notice: (text: String, action: (() -> Void)?)?, anchor: NSRect) {
+    func showItems(_ entries: [(MenuBarItem, NSImage?)], notice: (text: String, action: (() -> Void)?)?, anchor: NSRect) {
         let column = NSStackView()
         column.orientation = .vertical
         column.alignment = .trailing
@@ -81,15 +101,15 @@ final class DropPanel: NSPanel {
         var row = makeRow()
         var rowWidth: CGFloat = 0
         for (item, image) in entries {
-            if rowWidth > 0, rowWidth + item.bounds.width > maxRowWidth {
+            let view = ItemView(item: item, image: image)
+            if rowWidth > 0, rowWidth + view.itemWidth > maxRowWidth {
                 column.addArrangedSubview(row)
                 row = makeRow()
                 rowWidth = 0
             }
-            let view = ItemView(item: item, image: image)
             view.onClick = { [weak self] item, right in self?.onItemClick?(item, right) }
             row.addArrangedSubview(view)
-            rowWidth += item.bounds.width
+            rowWidth += view.itemWidth
         }
         if !row.arrangedSubviews.isEmpty {
             column.addArrangedSubview(row)

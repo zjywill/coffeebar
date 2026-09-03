@@ -19,6 +19,8 @@ final class MenuBarController: NSObject {
     private var isInlineShown = false
     /// 上次打开面板时扫到的辅助功能索引，点击兜底时用。
     private var axExtras: [AXMenuExtra] = []
+    /// 图标截图缓存，按窗口 ID。
+    private var imageCache: [CGWindowID: NSImage] = [:]
     private var mouseUpMonitor: Any?
     private var rehideTimer: Timer?
 
@@ -110,17 +112,21 @@ final class MenuBarController: NSObject {
                     items[i].ownerName = extra.appName
                 }
             }
-            var images = await ItemCapturer.capture(items)
-            // 兜底：个别窗口在屏幕外截不到，就临时展开一下再截。
-            let missing = items.filter { images[$0.windowID] == nil }
-            if !missing.isEmpty {
-                separatorItem.length = Self.shownLength
-                try? await Task.sleep(nanoseconds: 150_000_000)
-                let extra = await ItemCapturer.capture(missing)
-                separatorItem.length = Self.hiddenLength
-                images.merge(extra) { $1 }
+
+            // macOS 26 上屏幕外的窗口截不到图（SCK 报 -3811），
+            // 只能把图标展开一瞬间，截完马上收回。展不下的图标沿用上次缓存或用名字占位。
+            separatorItem.length = Self.shownLength
+            if let nearest = items.last {
+                _ = await ClickForwarder.waitUntilOnScreen(nearest.windowID)
             }
-            let entries = items.compactMap { item in images[item.windowID].map { (item, $0) } }
+            try? await Task.sleep(nanoseconds: 60_000_000)
+            let fresh = await ItemCapturer.capture(items.filter { MenuBarScanner.bounds(of: $0.windowID).map(MenuBarScanner.isOnScreen) ?? false })
+            if !isInlineShown {
+                separatorItem.length = Self.hiddenLength
+            }
+            imageCache.merge(fresh) { $1 }
+
+            let entries = items.map { ($0, imageCache[$0.windowID]) }
             panel.showItems(entries, notice: notice, anchor: anchor)
         }
     }
@@ -135,8 +141,10 @@ final class MenuBarController: NSObject {
         showInline()
         Task {
             if let rect = await ClickForwarder.waitUntilOnScreen(item.windowID) {
+                NSLog("CoffeeBar: forwarding click to \(item.ownerName) at \(rect)")
                 ClickForwarder.click(at: CGPoint(x: rect.midX, y: rect.midY), rightButton: rightButton)
             } else {
+                NSLog("CoffeeBar: \(item.ownerName) never came on screen, AX press fallback")
                 // 展开了也挤不进屏幕（屏幕太窄或被刘海占了），直接按它。
                 if let extra = AccessibilityIndex.match(item.bounds, in: axExtras) {
                     _ = AccessibilityIndex.press(extra)
