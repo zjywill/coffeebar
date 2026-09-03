@@ -1,0 +1,14 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>CoffeeBar</title>
+        <item>
+            <title>0.1.0</title>
+            <pubDate>Thu, 03 Sep 2026 11:24:23 +0800</pubDate>
+            <sparkle:version>10</sparkle:version>
+            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/zjywill/coffeebar/releases/download/v0.1.0/CoffeeBar-0.1.0.zip" length="3656964" type="application/octet-stream" sparkle:edSignature="ie0JGaoFYCvtaX2J3WpoCQlke+hhMyyYjjmz3RTTkyj71QibR6xWRDTLkELGvbQw+eV5QYW8AYHfpTDk4eSKDA=="/>
+        </item>
+    </channel>
+</rss>
