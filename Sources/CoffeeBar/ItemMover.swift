@@ -46,10 +46,15 @@ enum ItemMover {
         }
 
         let cursor = CGEvent(source: nil)?.location ?? .zero
-        let dropPoint = CGPoint(x: (rightSide ? targetFrame.maxX : targetFrame.minX) + xOffset, y: targetFrame.midY)
+        // 屏幕内的目标：落点放到目标左（右）缘再往外半个图标宽，明确落在那一侧
+        //（落点正好等于目标左缘时窗口服务器会把它排到右边）。
+        // 屏幕外的目标（隐藏区）：落点就用目标左缘，实测能精确回到原来的位置。
+        let targetOnScreen = MenuBarScanner.isOnScreen(targetFrame)
+        let sideOffset = targetOnScreen ? (itemFrame.width / 2 + 4) * (rightSide ? 1 : -1) : 0
+        let dropPoint = CGPoint(x: (rightSide ? targetFrame.maxX : targetFrame.minX) + sideOffset + xOffset, y: targetFrame.midY)
         // 目标在屏幕内且光标已在目标的正确一侧：抬起也放在光标处，光标全程不动。
         let cursorOnWantedSide = rightSide ? cursor.x > targetFrame.midX : cursor.x < targetFrame.midX
-        let stayPut = MenuBarScanner.isOnScreen(targetFrame) && cursorOnWantedSide
+        let stayPut = targetOnScreen && cursorOnWantedSide
 
         guard let down = event(.leftMouseDown, at: cursor, windowID: windowID, pid: ownerPID, flags: .maskCommand, source: source),
               let up = event(.leftMouseUp, at: stayPut ? cursor : dropPoint, windowID: targetWindowID, pid: ownerPID, flags: [], source: source)
