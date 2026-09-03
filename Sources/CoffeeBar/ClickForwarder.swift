@@ -22,6 +22,11 @@ enum ClickForwarder {
     /// 注意不能用 CGDisplayHideCursor 把光标藏起来：一藏，刚弹出的状态项菜单就会被关掉。
     static func click(at point: CGPoint, rightButton: Bool, windowID: CGWindowID? = nil, ownerPID: pid_t? = nil, targetPID: pid_t? = nil) {
         let source = CGEventSource(stateID: .hidSystemState)
+        // 合成事件之后系统默认会压制物理鼠标约 250 毫秒，这里设成 0。
+        for state in [CGEventSuppressionState.eventSuppressionStateRemoteMouseDrag, .eventSuppressionStateSuppressionInterval] {
+            source?.setLocalEventsFilterDuringSuppressionState([.permitLocalMouseEvents, .permitLocalKeyboardEvents, .permitSystemDefinedEvents], state: state)
+        }
+        source?.localEventsSuppressionInterval = 0
         let button: CGMouseButton = rightButton ? .right : .left
         let downType: CGEventType = rightButton ? .rightMouseDown : .leftMouseDown
         let upType: CGEventType = rightButton ? .rightMouseUp : .leftMouseUp
