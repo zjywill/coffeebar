@@ -13,3 +13,4 @@
 "Click the cup to expand or collapse. ⌘-drag an item left of the cup to hide it, right of it to keep it visible." = "点杯子展开或收起。按住 ⌘ 把图标拖到杯子左边隐藏、右边常显。";
 "Clicking the cup opens the panel instead of expanding the menu bar" = "点杯子弹出面板，而不是在菜单栏展开";
 "No hidden items. ⌘-drag an item to the left of the cup to hide it." = "没有隐藏的图标。按住 ⌘ 把图标拖到杯子左边即可隐藏。";
+"Seamless expand (no gap next to the cup, but animated)" = "无缝展开（杯子旁没有空隙，但有动画）";

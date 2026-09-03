@@ -12,3 +12,4 @@
 "Panel: expand the whole hidden section when opening an item" = "Panel: expand the whole hidden section when opening an item";
 "Clicking the cup opens the panel instead of expanding the menu bar" = "Clicking the cup opens the panel instead of expanding the menu bar";
 "Click the cup to expand or collapse. ⌘-drag an item left of the cup to hide it, right of it to keep it visible." = "Click the cup to expand or collapse. ⌘-drag an item left of the cup to hide it, right of it to keep it visible.";
+"Seamless expand (no gap next to the cup, but animated)" = "Seamless expand (no gap next to the cup, but animated)";

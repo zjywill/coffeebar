@@ -41,6 +41,13 @@ final class MenuBarController: NSObject {
         set { UserDefaults.standard.set(newValue, forKey: Self.clickOpensPanelKey) }
     }
 
+    /// 无缝展开：没有空隙但有 macOS 的增删动画。默认关（瞬时切换）。
+    private static let seamlessExpandKey = "CoffeeBar.seamlessExpand"
+    private var seamlessExpand: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.seamlessExpandKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.seamlessExpandKey) }
+    }
+
     private static let panelOnlyOnBuiltInKey = "CoffeeBar.panelOnlyOnBuiltIn"
     /// 外接显示器够宽，不需要面板；只在内建屏（有刘海、窄）上用面板。
     private var panelOnlyOnBuiltIn: Bool {
@@ -94,7 +101,8 @@ final class MenuBarController: NSObject {
             button.image = Self.cupImage(unfolded: false)
             button.target = self
             button.action = #selector(toggleClicked(_:))
-            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            // 按下即响应（和系统菜单一样），不等松开。⌘ 按住时按下不处理，留给 ⌘ 拖动；⌘ 点击在松开时处理。
+            button.sendAction(on: [.leftMouseDown, .leftMouseUp, .rightMouseUp])
         }
         if let button = separatorItem.button {
             // 分隔符不可见：它只是把左边的图标挤出屏幕的机制。
@@ -144,6 +152,10 @@ final class MenuBarController: NSObject {
             showContextMenu()
             return
         }
+        let commandHeld = event?.modifierFlags.contains(.command) == true
+        // 左键：不带 ⌘ 在按下时处理；带 ⌘ 在松开时处理（按下要留给 ⌘ 拖动杯子本身）。
+        if event?.type == .leftMouseDown, commandHeld { return }
+        if event?.type == .leftMouseUp, !commandHeld { return }
         if panel.isVisible {
             panel.dismiss()
             return
@@ -558,22 +570,28 @@ final class MenuBarController: NSObject {
     private func applyInlineState() {
         // 展开时把分隔符整个从菜单栏拿掉（状态项再窄 macOS 也留 16 点内边距，会留出空隙）。
         // 收起时先把保存的位置写回、以 0 宽放回原槽位、等它落位，再撑大。
-        if inlineState == .hidden {
+        // 两种展开方式：
+        // - 瞬时（默认）：只改分隔符宽度，一帧切换；分隔符缩到 0 后 macOS 仍留 16 点内边距，杯子旁会多一小段空隙。
+        // - 无缝：展开时把分隔符从菜单栏移除，收起时按保存的位置放回；没有空隙，但 macOS 对增删有约半秒的动画。
+        if seamlessExpand {
+            if inlineState == .hidden {
+                if !separatorItem.isVisible {
+                    if let saved = savedSeparatorPosition { UserDefaults.standard.set(saved, forKey: Self.separatorPositionKey) }
+                    separatorItem.length = Self.hiddenLength
+                    separatorItem.isVisible = true
+                } else {
+                    separatorItem.length = Self.hiddenLength
+                }
+            } else if separatorItem.isVisible {
+                savedSeparatorPosition = UserDefaults.standard.object(forKey: Self.separatorPositionKey)
+                separatorItem.isVisible = false
+            }
+        } else {
             if !separatorItem.isVisible {
                 if let saved = savedSeparatorPosition { UserDefaults.standard.set(saved, forKey: Self.separatorPositionKey) }
-                separatorItem.length = 0
                 separatorItem.isVisible = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-                    guard let self, self.inlineState == .hidden else { return }
-                    self.separatorItem.length = Self.hiddenLength
-                }
-            } else {
-                separatorItem.length = Self.hiddenLength
             }
-        } else if separatorItem.isVisible {
-            separatorItem.length = 0
-            savedSeparatorPosition = UserDefaults.standard.object(forKey: Self.separatorPositionKey)
-            separatorItem.isVisible = false
+            separatorItem.length = inlineState == .hidden ? Self.hiddenLength : Self.shownLength
         }
         toggleItem.button?.image = inlineState == .arranging
             ? NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)
@@ -621,6 +639,10 @@ final class MenuBarController: NSObject {
         menu.addItem(arrange)
         menu.addItem(withTitle: L("Click the cup to expand or collapse. ⌘-drag an item left of the cup to hide it, right of it to keep it visible."), action: nil, keyEquivalent: "")
         menu.addItem(.separator())
+        let seamless = NSMenuItem(title: L("Seamless expand (no gap next to the cup, but animated)"), action: #selector(toggleSeamlessExpand), keyEquivalent: "")
+        seamless.target = self
+        seamless.state = seamlessExpand ? .on : .off
+        menu.addItem(seamless)
         let panelItem = NSMenuItem(title: L("Clicking the cup opens the panel instead of expanding the menu bar"), action: #selector(toggleClickOpensPanel), keyEquivalent: "")
         panelItem.target = self
         panelItem.state = clickOpensPanel ? .on : .off
@@ -659,6 +681,10 @@ final class MenuBarController: NSObject {
             axExtras = await Task.detached(priority: .userInitiated) { AccessibilityIndex.scan() }.value
             layoutManager.recordCurrent(extras: axExtras)
         }
+    }
+
+    @objc private func toggleSeamlessExpand() {
+        seamlessExpand.toggle()
     }
 
     @objc private func toggleClickOpensPanel() {
