@@ -68,18 +68,32 @@ enum ItemMover {
         source.localEventsSuppressionInterval = 0
 
         let t0 = Date()
-        if !stayPut { CGDisplayHideCursor(CGMainDisplayID()) }
         down.post(tap: .cgSessionEventTap)
         let afterDown = await waitForFrameChange(of: windowID, from: itemFrame, timeout: 0.3)
         let t1 = Date()
-        up.post(tap: .cgSessionEventTap)
-        let afterUp = await waitForFrameChange(of: windowID, from: afterDown ?? itemFrame, timeout: 0.5)
-        if !stayPut {
-            CGWarpMouseCursorPosition(cursor)
-            CGAssociateMouseAndMouseCursorPosition(1) // 解除 warp 之后系统对物理鼠标移动的短暂压制，否则会有"鼠标卡一下"的感觉
+
+        var hiddenMs = 0
+        if stayPut {
+            up.post(tap: .cgSessionEventTap)
+        } else {
+            // 抬起事件会把光标甩到屏幕边缘。只在它被处理的那几毫秒藏起光标，
+            // 一看到光标跳走就立刻挪回用户此刻的位置（不是挪动前的位置，免得丢掉这期间的移动）。
+            let latest = CGEvent(source: nil)?.location ?? cursor
+            let th = Date()
+            CGDisplayHideCursor(CGMainDisplayID())
+            up.post(tap: .cgSessionEventTap)
+            let deadline = Date().addingTimeInterval(0.1)
+            while Date() < deadline {
+                if let now = CGEvent(source: nil)?.location, abs(now.x - latest.x) > 20 || abs(now.y - latest.y) > 20 { break }
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
+            CGWarpMouseCursorPosition(latest)
+            CGAssociateMouseAndMouseCursorPosition(1) // 解除 warp 之后系统对物理鼠标移动的短暂压制
             CGDisplayShowCursor(CGMainDisplayID())
+            hiddenMs = Int(Date().timeIntervalSince(th) * 1000)
         }
-        NSLog("CoffeeBar: move \(windowID) \(stayPut ? "(cursor untouched)" : "(cursor hidden at drop)"): \(itemFrame) -> \(String(describing: afterUp ?? afterDown)) down-wait \(Int(t1.timeIntervalSince(t0) * 1000))ms total \(Int(Date().timeIntervalSince(t0) * 1000))ms")
+        let afterUp = await waitForFrameChange(of: windowID, from: afterDown ?? itemFrame, timeout: 0.5)
+        NSLog("CoffeeBar: move \(windowID) \(stayPut ? "(cursor untouched)" : "(cursor hidden \(hiddenMs)ms)"): \(itemFrame) -> \(String(describing: afterUp ?? afterDown)) down-wait \(Int(t1.timeIntervalSince(t0) * 1000))ms total \(Int(Date().timeIntervalSince(t0) * 1000))ms")
         return afterUp ?? afterDown
     }
 }
