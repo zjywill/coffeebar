@@ -6,9 +6,9 @@
 "Arranging: ⌘-drag items left of the cup to hide them, then click the cup to finish" = "Arranging: ⌘-drag items left of the cup to hide them, then click the cup to finish";
 "Finish Arranging" = "Finish Arranging";
 "Arrange Items…" = "Arrange Items…";
-"Use panel only on built-in display (expand inline on external displays)" = "Use panel only on built-in display (expand inline on external displays)";
 "Check for Updates…" = "Check for Updates…";
 "Quit CoffeeBar" = "Quit CoffeeBar";
 "Panel: expand the whole hidden section when opening an item" = "Panel: expand the whole hidden section when opening an item";
 "Clicking the cup opens the panel instead of expanding the menu bar" = "Clicking the cup opens the panel instead of expanding the menu bar";
 "Click the cup to expand or collapse. ⌘-drag an item left of the cup to hide it, right of it to keep it visible." = "Click the cup to expand or collapse. ⌘-drag an item left of the cup to hide it, right of it to keep it visible.";
+"On a display with a notch, open the panel instead" = "On a display with a notch, open the panel instead";

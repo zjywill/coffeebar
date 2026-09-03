@@ -41,11 +41,17 @@ final class MenuBarController: NSObject {
         set { UserDefaults.standard.set(newValue, forKey: Self.clickOpensPanelKey) }
     }
 
-    private static let panelOnlyOnBuiltInKey = "CoffeeBar.panelOnlyOnBuiltIn"
-    /// 外接显示器够宽，不需要面板；只在内建屏（有刘海、窄）上用面板。
-    private var panelOnlyOnBuiltIn: Bool {
-        get { UserDefaults.standard.bool(forKey: Self.panelOnlyOnBuiltInKey) }
-        set { UserDefaults.standard.set(newValue, forKey: Self.panelOnlyOnBuiltInKey) }
+    /// 刘海屏上菜单栏展不开（刘海下面不画图标，放不下的会被 macOS 藏掉），默认改用面板。
+    private static let panelOnNotchKey = "CoffeeBar.panelOnNotch"
+    private var panelOnNotch: Bool {
+        get { UserDefaults.standard.object(forKey: Self.panelOnNotchKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: Self.panelOnNotchKey) }
+    }
+
+    /// 杯子所在的屏幕有没有刘海。
+    private var cupScreenHasNotch: Bool {
+        guard let screen = toggleItem.button?.window?.screen ?? NSScreen.main else { return false }
+        return screen.auxiliaryTopLeftArea != nil
     }
 
     private var inlineState: InlineState = .hidden
@@ -168,13 +174,11 @@ final class MenuBarController: NSObject {
         }
         // 默认（Thaw 的交互）：左键在菜单栏里展开 / 收起隐藏区，用户自己点图标，不做任何自动点击。
         // ⌥ + 左键：进入整理模式（展开且不自动收回）。开了"弹面板"选项则左右对调。
-        let wantPanel = clickOpensPanel != (event?.modifierFlags.contains(.option) == true)
+        // 面板 or 展开：全局开关，或者刘海屏自动用面板；⌥ 反转。
+        let panelByDefault = clickOpensPanel || (panelOnNotch && cupScreenHasNotch)
+        let wantPanel = panelByDefault != (event?.modifierFlags.contains(.option) == true)
         if wantPanel {
-            if panelOnlyOnBuiltIn, let screen = toggleItem.button?.window?.screen, !MenuBarScanner.isBuiltIn(screen) {
-                setInline(.expanded)
-            } else {
-                openPanel()
-            }
+            openPanel()
         } else if event?.modifierFlags.contains(.command) == true {
             setInline(.arranging)
         } else {
@@ -636,10 +640,10 @@ final class MenuBarController: NSObject {
         onlyItem.target = self
         onlyItem.state = revealMode == .section ? .on : .off
         menu.addItem(onlyItem)
-        let builtIn = NSMenuItem(title: L("Use panel only on built-in display (expand inline on external displays)"), action: #selector(togglePanelOnlyOnBuiltIn), keyEquivalent: "")
-        builtIn.target = self
-        builtIn.state = panelOnlyOnBuiltIn ? .on : .off
-        menu.addItem(builtIn)
+        let notch = NSMenuItem(title: L("On a display with a notch, open the panel instead"), action: #selector(togglePanelOnNotch), keyEquivalent: "")
+        notch.target = self
+        notch.state = panelOnNotch ? .on : .off
+        menu.addItem(notch)
         menu.addItem(.separator())
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
         menu.addItem(withTitle: "CoffeeBar \(version)", action: nil, keyEquivalent: "")
@@ -676,7 +680,7 @@ final class MenuBarController: NSObject {
         revealMode = revealMode == .item ? .section : .item
     }
 
-    @objc private func togglePanelOnlyOnBuiltIn() {
-        panelOnlyOnBuiltIn.toggle()
+    @objc private func togglePanelOnNotch() {
+        panelOnNotch.toggle()
     }
 }

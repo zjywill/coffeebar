@@ -22,7 +22,7 @@ Signed and notarized by Apple. Requires macOS 14 or later, Apple Silicon or Inte
 - **New apps stay visible** until you decide to hide them.
 - **System icons are never hidden.** Battery, Wi-Fi, Control Center, Spotlight and the input menu always stay.
 - **Notch and narrow screens**: turn on *Reveal only the clicked item* and just that one icon is brought into the menu bar instead of the whole section.
-- **External display option.** On big monitors, `<` can simply expand the hidden icons inline instead of opening the panel.
+- **Notch aware.** On a MacBook display with a notch the menu bar cannot show everything, so clicking the cup opens the panel there; on external displays it expands inline.
 - **Only asks for Accessibility.** Nothing else.
 
 ## License
