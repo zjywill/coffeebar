@@ -75,10 +75,11 @@ final class LayoutManager {
     /// 把当前状态记为用户意图。整理结束、我们自己挪完图标后调用。
     func recordCurrent(extras: [AXMenuExtra]) {
         let items = MenuBarScanner.allStatusItems()
+        let toggleBounds = Self.toggleBounds(in: items, toggle: toggleWindowID())
         var next = layout
         for item in items {
             guard let bundleID = Self.bundleID(for: item, extras: extras) else { continue }
-            next[bundleID] = MenuBarScanner.isOnScreen(item.bounds) ? .visible : .hidden
+            next[bundleID] = Self.side(of: item, toggleBounds: toggleBounds)
         }
         layout = next
         knownApps.formUnion(next.keys)
@@ -98,8 +99,11 @@ final class LayoutManager {
         guard NSEvent.pressedMouseButtons == 0, !NSEvent.modifierFlags.contains(.command) else { return }
         let items = MenuBarScanner.allStatusItems()
         let ids = Set(items.map(\.windowID))
-        let sidesChanged = items.contains { lastSides[$0.windowID] != (MenuBarScanner.isOnScreen($0.bounds) ? Side.visible : .hidden) }
-        guard force || ids != lastWindowIDs || sidesChanged else { return }
+        let toggleBoundsNow = Self.toggleBounds(in: items, toggle: toggleWindowID())
+        let sidesChanged = items.contains { lastSides[$0.windowID] != Self.side(of: $0, toggleBounds: toggleBoundsNow) }
+        // 在屏幕上却位于 `<` 左边的（用户刚拖过去的），要收进去。
+        let tuckPending = items.contains { MenuBarScanner.isOnScreen($0.bounds) && Self.side(of: $0, toggleBounds: toggleBoundsNow) == .hidden }
+        guard force || ids != lastWindowIDs || sidesChanged || tuckPending else { return }
         NSLog("CoffeeBar: layout check running over \(items.count) items")
         lastWindowIDs = ids
 
@@ -113,6 +117,7 @@ final class LayoutManager {
         var changed = false
         for _ in 0..<12 {
             let current = MenuBarScanner.allStatusItems()
+            let toggleBounds = Self.toggleBounds(in: current, toggle: toggle)
             var acted = false
             for item in current {
                 if Self.isSystemItem(item, extras: extras) {
@@ -123,7 +128,19 @@ final class LayoutManager {
                     break
                 }
                 guard let bundleID = Self.bundleID(for: item, extras: extras) else { continue }
-                let actual: Side = MenuBarScanner.isOnScreen(item.bounds) ? .visible : .hidden
+                let actual = Self.side(of: item, toggleBounds: toggleBounds)
+
+                // 落在 `<` 左边但还在屏幕上的（用户拖过去的）：真正收进隐藏区，并记为隐藏。
+                if actual == .hidden, MenuBarScanner.isOnScreen(item.bounds),
+                   moveFailures[item.windowID, default: 0] < Self.maxMoveFailures {
+                    NSLog("CoffeeBar: \(bundleID) sits left of the toggle, tucking it into the hidden area")
+                    layout[bundleID] = .hidden
+                    knownApps.insert(bundleID)
+                    changed = true
+                    await move(item, toLeftOf: separator)
+                    acted = true
+                    break
+                }
 
                 if !knownApps.contains(bundleID) {
                     // 新 App：默认露出来，让用户看见它。
@@ -163,11 +180,26 @@ final class LayoutManager {
         }
         if changed { save() }
         let final = MenuBarScanner.allStatusItems()
+        let finalToggle = Self.toggleBounds(in: final, toggle: toggle)
         lastWindowIDs = Set(final.map(\.windowID))
-        lastSides = Dictionary(uniqueKeysWithValues: final.map { ($0.windowID, MenuBarScanner.isOnScreen($0.bounds) ? Side.visible : .hidden) })
+        lastSides = Dictionary(uniqueKeysWithValues: final.map { ($0.windowID, Self.side(of: $0, toggleBounds: finalToggle)) })
     }
 
     // MARK: - 工具
+
+    /// 图标在哪一侧。规则按直觉来：`<` 左边的都算隐藏，不管它是否恰好还在屏幕上
+    /// （分隔符隐藏态时不可见，用户拖到 `<` 左边其实落在了分隔符右侧，仍在屏幕上）。
+    static func side(of item: MenuBarItem, toggleBounds: CGRect?) -> Side {
+        guard MenuBarScanner.isOnScreen(item.bounds) else { return .hidden }
+        if let toggleBounds, item.bounds.midX < toggleBounds.midX { return .hidden }
+        return .visible
+    }
+
+    /// 从同一次扫描结果里取 `<` 的位置，避免和图标位置来自不同时刻。
+    static func toggleBounds(in items: [MenuBarItem], toggle: CGWindowID?) -> CGRect? {
+        guard let toggle else { return nil }
+        return items.first { $0.windowID == toggle }?.bounds ?? MenuBarScanner.bounds(of: toggle)
+    }
 
     static func bundleID(for item: MenuBarItem, extras: [AXMenuExtra]) -> String? {
         guard let extra = AccessibilityIndex.match(item.bounds, in: extras),

@@ -99,7 +99,7 @@ final class DropPanel: NSPanel, NSTextFieldDelegate {
         isReleasedWhenClosed = false
         collectionBehavior = [.canJoinAllSpaces, .transient, .ignoresCycle]
 
-        searchField.placeholderString = "输入 App 名过滤，回车打开"
+        searchField.placeholderString = L("Type to filter by app name, Enter to open")
         searchField.font = .systemFont(ofSize: 12)
         searchField.isBezeled = false
         searchField.drawsBackground = false
@@ -146,7 +146,7 @@ final class DropPanel: NSPanel, NSTextFieldDelegate {
             column.addArrangedSubview(makeNotice(notice.text, buttons: notice.buttons))
         }
         if entries.isEmpty, notice == nil {
-            column.addArrangedSubview(makeLabel("没有隐藏的图标。右键 “<” 选「整理图标…」，把要藏的拖到 “/” 左边。"))
+            column.addArrangedSubview(makeLabel(L("No hidden items. Right-click “<” and choose “Arrange Items…”, then drag items to the left of “/” to hide them.")))
         }
         if !entries.isEmpty {
             let searchRow = NSStackView()
@@ -204,7 +204,7 @@ final class DropPanel: NSPanel, NSTextFieldDelegate {
             rowsContainer.addArrangedSubview(row)
         }
         if filtered.isEmpty {
-            rowsContainer.addArrangedSubview(makeLabel("没有匹配的 App"))
+            rowsContainer.addArrangedSubview(makeLabel(L("No matching app")))
         }
         relayout()
     }

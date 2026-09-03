@@ -150,8 +150,8 @@ final class MenuBarController: NSObject {
         if !Permissions.hasAccessibility {
             Permissions.requestAccessibility()
             panel.showItems([], notice: (
-                "需要「辅助功能」权限来识别和点击隐藏的图标。授权后再点一次 “<” 即可。",
-                [("打开系统设置", Permissions.openAccessibilitySettings)]
+                L("Accessibility permission is needed to identify and click hidden items. Grant it, then click “<” again."),
+                [(L("Open System Settings"), Permissions.openAccessibilitySettings)]
             ), anchor: anchor)
             return
         }
@@ -178,6 +178,20 @@ final class MenuBarController: NSObject {
     }
 
     func debugArrange() { setInline(.arranging) }
+
+    /// 调试用：模拟用户把一个隐藏图标拖到 `<` 左边（落在分隔符和 `<` 之间）。
+    func debugDropLeftOfToggle(appNamed name: String) {
+        var items = MenuBarScanner.hiddenItems()
+        axExtras = AccessibilityIndex.scan()
+        for i in items.indices {
+            if let extra = AccessibilityIndex.match(items[i].bounds, in: axExtras) { items[i].ownerName = extra.appName }
+        }
+        guard let item = items.first(where: { $0.ownerName == name }), let toggleWindowID else { return }
+        Task {
+            let r = await ItemMover.move(windowID: item.windowID, ownerPID: item.ownerPID, toLeftOf: toggleWindowID, xOffset: -(item.bounds.width / 2 + 40))
+            NSLog("CoffeeBar: drop-left test moved \(name) to \(String(describing: r)); toggle at \(String(describing: MenuBarScanner.bounds(of: toggleWindowID)))")
+        }
+    }
 
     /// 调试用：把某个可见图标（比如系统的 Spotlight）挪进隐藏区，看会不会被挪回来。
     func debugHide(appNamed name: String) {
@@ -391,7 +405,7 @@ final class MenuBarController: NSObject {
         case .expanded: symbol = "chevron.right"
         }
         toggleItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
-        toggleItem.button?.toolTip = inlineState == .arranging ? "整理中：⌘ 拖动图标或 “/”，完成后点这里收回" : nil
+        toggleItem.button?.toolTip = inlineState == .arranging ? L("Arranging: ⌘-drag items or “/”, then click here to finish") : nil
 
         if inlineState == .expanded {
             if outsideClickMonitor == nil {
@@ -428,13 +442,13 @@ final class MenuBarController: NSObject {
 
     private func showContextMenu() {
         let menu = NSMenu()
-        let arrange = NSMenuItem(title: inlineState == .arranging ? "完成整理" : "整理图标…", action: nil, keyEquivalent: "")
+        let arrange = NSMenuItem(title: inlineState == .arranging ? L("Finish Arranging") : L("Arrange Items…"), action: nil, keyEquivalent: "")
         arrange.target = self
         arrange.action = inlineState == .arranging ? #selector(finishArranging) : #selector(startArranging)
         menu.addItem(arrange)
-        menu.addItem(withTitle: "整理时 “/” 左边的图标会被隐藏，按住 ⌘ 拖动图标或 “/” 调整", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: L("While arranging, items left of “/” are hidden. ⌘-drag items or “/” to adjust."), action: nil, keyEquivalent: "")
         menu.addItem(.separator())
-        let builtIn = NSMenuItem(title: "只在内建屏使用面板（外接屏直接展开）", action: #selector(togglePanelOnlyOnBuiltIn), keyEquivalent: "")
+        let builtIn = NSMenuItem(title: L("Use panel only on built-in display (expand inline on external displays)"), action: #selector(togglePanelOnlyOnBuiltIn), keyEquivalent: "")
         builtIn.target = self
         builtIn.state = panelOnlyOnBuiltIn ? .on : .off
         menu.addItem(builtIn)
@@ -442,11 +456,11 @@ final class MenuBarController: NSObject {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
         menu.addItem(withTitle: "CoffeeBar \(version)", action: nil, keyEquivalent: "")
         if updater.isConfigured {
-            let check = NSMenuItem(title: "检查更新…", action: #selector(checkForUpdates), keyEquivalent: "")
+            let check = NSMenuItem(title: L("Check for Updates…"), action: #selector(checkForUpdates), keyEquivalent: "")
             check.target = self
             menu.addItem(check)
         }
-        menu.addItem(withTitle: "退出 CoffeeBar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(withTitle: L("Quit CoffeeBar"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         toggleItem.menu = menu
         toggleItem.button?.performClick(nil)
         toggleItem.menu = nil

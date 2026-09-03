@@ -29,7 +29,7 @@ enum ItemMover {
 
     /// 把 `windowID` 挪到 `targetWindowID` 的左边（或右边）。返回挪动后的位置，失败返回 nil。
     @MainActor
-    static func move(windowID: CGWindowID, ownerPID: pid_t, toLeftOf targetWindowID: CGWindowID, rightSide: Bool = false) async -> CGRect? {
+    static func move(windowID: CGWindowID, ownerPID: pid_t, toLeftOf targetWindowID: CGWindowID, rightSide: Bool = false, xOffset: CGFloat = 0) async -> CGRect? {
         guard let source = CGEventSource(stateID: .hidSystemState),
               let itemFrame = MenuBarScanner.bounds(of: windowID),
               let targetFrame = MenuBarScanner.bounds(of: targetWindowID)
@@ -39,7 +39,7 @@ enum ItemMover {
         }
 
         let start = CGPoint(x: 20_000, y: 20_000)
-        let end = CGPoint(x: rightSide ? targetFrame.maxX : targetFrame.minX, y: targetFrame.midY)
+        let end = CGPoint(x: (rightSide ? targetFrame.maxX : targetFrame.minX) + xOffset, y: targetFrame.midY)
         guard let down = event(.leftMouseDown, at: start, windowID: windowID, pid: ownerPID, flags: .maskCommand, source: source),
               let up = event(.leftMouseUp, at: end, windowID: targetWindowID, pid: ownerPID, flags: [], source: source)
         else { return nil }

@@ -8,6 +8,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.environment["COFFEEBAR_ARRANGE"] != nil {
             controller?.debugArrange()
         }
+        if let name = ProcessInfo.processInfo.environment["COFFEEBAR_DROPLEFT"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [controller] in
+                controller?.debugDropLeftOfToggle(appNamed: name)
+            }
+        }
         if let name = ProcessInfo.processInfo.environment["COFFEEBAR_HIDE"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [controller] in
                 controller?.debugHide(appNamed: name)

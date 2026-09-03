@@ -1,0 +1,12 @@
+"Type to filter by app name, Enter to open" = "输入 App 名过滤，回车打开";
+"No hidden items. Right-click “<” and choose “Arrange Items…”, then drag items to the left of “/” to hide them." = "没有隐藏的图标。右键 “<” 选「整理图标…」，把要藏的拖到 “/” 左边。";
+"No matching app" = "没有匹配的 App";
+"Accessibility permission is needed to identify and click hidden items. Grant it, then click “<” again." = "需要「辅助功能」权限来识别和点击隐藏的图标。授权后再点一次 “<” 即可。";
+"Open System Settings" = "打开系统设置";
+"Arranging: ⌘-drag items or “/”, then click here to finish" = "整理中：⌘ 拖动图标或 “/”，完成后点这里收回";
+"Finish Arranging" = "完成整理";
+"Arrange Items…" = "整理图标…";
+"While arranging, items left of “/” are hidden. ⌘-drag items or “/” to adjust." = "整理时 “/” 左边的图标会被隐藏，按住 ⌘ 拖动图标或 “/” 调整";
+"Use panel only on built-in display (expand inline on external displays)" = "只在内建屏使用面板（外接屏直接展开）";
+"Check for Updates…" = "检查更新…";
+"Quit CoffeeBar" = "退出 CoffeeBar";

@@ -37,6 +37,11 @@ SPARKLE_FW="$ROOT/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm
 cp -R "$SPARKLE_FW" "$APP/Contents/Frameworks/Sparkle.framework"
 install_name_tool -add_rpath @executable_path/../Frameworks "$APP/Contents/MacOS/CoffeeBar"
 
+# 本地化字符串。
+for lproj in "$ROOT"/Resources/*.lproj; do
+  cp -R "$lproj" "$APP/Contents/Resources/"
+done
+
 # 图标：Resources/CoffeeBar.icon 是 Icon Composer 格式，用 Xcode 的 actool 编译成 .icns + Assets.car。
 ICON_KEYS=""
 if xcrun --find actool >/dev/null 2>&1; then
@@ -59,6 +64,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key><string>com.zjywill.coffeebar</string>
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleLocalizations</key><array><string>en</string><string>zh-Hans</string></array>
     <key>CFBundleName</key><string>CoffeeBar</string>
     <key>CFBundleExecutable</key><string>CoffeeBar</string>
     <key>CFBundlePackageType</key><string>APPL</string>
