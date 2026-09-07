@@ -93,6 +93,10 @@ if [ -z "${SIGN_IDENTITY:-}" ]; then
     | grep -o '"Developer ID Application[^"]*"' | head -1 | tr -d '"')
   SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 fi
+# 签名前清掉扩展属性：Sparkle 是从 .build 的下载产物 cp 过来的，带着 quarantine/provenance，
+# 打包 zip 时会变成 ._xxx 的 AppleDouble 文件，解压后破坏 framework 的封印。
+xattr -cr "$APP"
+
 SIGN_FLAGS=(--force --sign "$SIGN_IDENTITY" --timestamp)
 [ "$SIGN_IDENTITY" = "-" ] && SIGN_FLAGS=(--force --sign -)
 [ "${HARDENED_RUNTIME:-0}" = "1" ] && SIGN_FLAGS+=(--options runtime)

@@ -50,14 +50,28 @@ BUILD_NUMBER=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP/Content
 # ---- 2. 公证 + staple ---------------------------------------------------------
 REL="$ROOT/build/release"
 rm -rf "$REL"; mkdir -p "$REL"
-ditto -c -k --keepParent "$APP" "$REL/notarize.zip"
+ditto -c -k --keepParent --norsrc --noextattr "$APP" "$REL/notarize.zip"
 xcrun notarytool submit "$REL/notarize.zip" --keychain-profile "$NOTARY_PROFILE" --wait
 xcrun stapler staple "$APP"
 xcrun stapler validate "$APP"
 spctl --assess --type execute --verbose=4 "$APP"
 
 ASSET="CoffeeBar-$VERSION.zip"
-ditto -c -k --keepParent "$APP" "$REL/$ASSET"
+# spctl 的评估会给 bundle 里每一项打上 com.apple.provenance；ditto 默认把 xattr 写成
+# ._xxx 的 AppleDouble 条目，而 Archive Utility / unzip 解压时符号链接设不了 xattr，
+# 就会在 Sparkle.framework 根目录留下实体 ._xxx 文件 —— 封印破了，Gatekeeper 报"已损坏"。
+# 所以打包前清干净 xattr，并让 ditto 不写 AppleDouble。
+xattr -cr "$APP"
+ditto -c -k --keepParent --norsrc --noextattr "$APP" "$REL/$ASSET"
+
+# 按用户的真实路径验一遍：普通 unzip 解出来也必须通过 Gatekeeper。
+VERIFY="$REL/verify"
+rm -rf "$VERIFY"; mkdir -p "$VERIFY"
+(cd "$VERIFY" && unzip -q "$REL/$ASSET")
+spctl --assess --type execute --verbose=4 "$VERIFY/CoffeeBar.app" \
+  || die "zip 解压后 Gatekeeper 不认，检查 bundle 里的 ._* 残留"
+xcrun stapler validate "$VERIFY/CoffeeBar.app" >/dev/null || die "解压后公证票丢了"
+rm -rf "$VERIFY"
 
 # ---- 3. appcast ---------------------------------------------------------------
 # appcast 里只放这一版：GitHub 的下载地址按 tag 分，generate_appcast 会用同一个前缀重写所有条目。
