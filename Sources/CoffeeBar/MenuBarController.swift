@@ -186,11 +186,8 @@ final class MenuBarController: NSObject {
         guard let anchor = toggleItem.button?.window?.frame else { return }
 
         if !Permissions.hasAccessibility {
-            Permissions.requestAccessibility()
-            panel.showItems([], notice: (
-                L("Accessibility permission is needed to identify and click hidden items. Grant it, then click the cup again."),
-                [(L("Open System Settings"), Permissions.openAccessibilitySettings)]
-            ), anchor: anchor)
+            // 没有辅助功能权限什么都做不了：直接弹权限引导窗口，里面有申请按钮、设置入口和状态轮询。
+            PermissionsWindowController.shared.show()
             return
         }
 
@@ -221,7 +218,7 @@ final class MenuBarController: NSObject {
             var notice: (text: String, buttons: [DropPanel.NoticeButton])?
             if ItemCapture.isAvailable, !ItemCapture.hasPermission, !items.isEmpty {
                 notice = (L("Grant Screen Recording to see the real icons with badges and readings."),
-                          [(L("Grant Screen Recording"), { ItemCapture.requestPermission(); ItemCapture.openScreenRecordingSettings() })])
+                          [(L("Grant Screen Recording"), { PermissionsWindowController.shared.show() })])
             }
             panel.showItems(items.map { ($0, $0.icon) }, notice: notice, anchor: anchor)
             startCaptureLoop(items)
@@ -653,6 +650,10 @@ final class MenuBarController: NSObject {
         setInline(.arranging)
     }
 
+    @objc private func showPermissions() {
+        PermissionsWindowController.shared.show()
+    }
+
     @objc private func checkForUpdates() {
         updater.checkForUpdates()
     }
@@ -678,6 +679,9 @@ final class MenuBarController: NSObject {
         notch.state = panelOnNotch ? .on : .off
         menu.addItem(notch)
         menu.addItem(.separator())
+        let permissions = NSMenuItem(title: L("Permissions…"), action: #selector(showPermissions), keyEquivalent: "")
+        permissions.target = self
+        menu.addItem(permissions)
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
         menu.addItem(withTitle: "CoffeeBar \(version)", action: nil, keyEquivalent: "")
         if updater.isConfigured {

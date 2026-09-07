@@ -8,6 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Bridging.setConnectionProperty(true, forKey: "SetsCursorInBackground")
         NSLog("CoffeeBar: SetsCursorInBackground = \(String(describing: Bridging.connectionProperty(forKey: "SetsCursorInBackground")))")
         controller = MenuBarController()
+        // 新用户、或者辅助功能权限没了：弹权限引导（Thaw 的做法），不然用户不知道该去哪开。
+        PermissionsWindowController.shared.showIfNeeded()
         if ProcessInfo.processInfo.environment["COFFEEBAR_PANEL"] != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [controller] in controller?.debugOpenPanel() }
         }
