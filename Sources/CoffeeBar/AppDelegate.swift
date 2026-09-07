@@ -8,6 +8,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Bridging.setConnectionProperty(true, forKey: "SetsCursorInBackground")
         NSLog("CoffeeBar: SetsCursorInBackground = \(String(describing: Bridging.connectionProperty(forKey: "SetsCursorInBackground")))")
         controller = MenuBarController()
+        if ProcessInfo.processInfo.environment["COFFEEBAR_PANEL"] != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [controller] in controller?.debugOpenPanel() }
+        }
         if ProcessInfo.processInfo.environment["COFFEEBAR_ARRANGE"] != nil {
             controller?.debugArrange()
         }

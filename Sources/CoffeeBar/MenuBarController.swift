@@ -217,13 +217,42 @@ final class MenuBarController: NSObject {
                         && NSRunningApplication(processIdentifier: item.ownerPID)?.bundleIdentifier == "com.apple.controlcenter"
                 }
             }
-            panel.showItems(items.map { ($0, $0.icon) }, notice: nil, anchor: anchor)
+            // 真实截图要屏幕录制权限；没有就退回 App 图标，并在面板里给一个授权入口。
+            var notice: (text: String, buttons: [DropPanel.NoticeButton])?
+            if ItemCapture.isAvailable, !ItemCapture.hasPermission, !items.isEmpty {
+                notice = (L("Grant Screen Recording to see the real icons with badges and readings."),
+                          [(L("Grant Screen Recording"), { ItemCapture.requestPermission(); ItemCapture.openScreenRecordingSettings() })])
+            }
+            panel.showItems(items.map { ($0, $0.icon) }, notice: notice, anchor: anchor)
+            startCaptureLoop(items)
             // 顺手刷新缓存，下次更准（新启动的 App、变过位置的图标）。
             refreshAccessibilityIndex()
         }
     }
 
+    private var captureTask: Task<Void, Never>?
+
+    /// 面板打开期间每秒截一次隐藏图标的真实画面（Thaw 的 live refresh，隐藏区 1 fps）；面板一关就停。
+    private func startCaptureLoop(_ items: [MenuBarItem]) {
+        captureTask?.cancel()
+        guard ItemCapture.isAvailable, ItemCapture.hasPermission else { return }
+        let ids = items.map(\.windowID)
+        captureTask = Task { [weak self] in
+            while let self, self.panel.isVisible, !Task.isCancelled {
+                let t0 = Date()
+                let capture = await Task.detached(priority: .userInitiated) { ItemCapture.capture(ids) }.value
+                guard self.panel.isVisible, !Task.isCancelled else { break }
+                self.panel.updateCaptures(capture)
+                if ProcessInfo.processInfo.environment["COFFEEBAR_DEBUG"] != nil {
+                    NSLog("CoffeeBar: captured \(capture.images.count)/\(ids.count) icons (light=\(capture.glyphsAreLight)) in \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+    }
+
     func debugArrange() { setInline(.arranging) }
+    func debugOpenPanel() { openPanel() }
 
     /// 调试用：模拟用户把一个隐藏图标拖到 `<` 左边（落在分隔符和 `<` 之间）。
     func debugDropLeftOfToggle(appNamed name: String) {

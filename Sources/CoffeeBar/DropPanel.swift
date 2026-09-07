@@ -1,9 +1,12 @@
 import AppKit
 
-/// 面板里的一个图标：显示所属 App 的图标，认不出 App 时显示名字。左键 / 右键都转发。
+/// 面板里的一个图标：优先显示菜单栏里的真实截图（带角标、读数），没有截图时显示所属 App 的图标，
+/// 认不出 App 时显示名字。左键 / 右键都转发。
 final class ItemView: NSView {
     let item: MenuBarItem
     private let image: NSImage?
+    /// 真实截图，每秒刷新。宽度变了要重排，所以宽度变化由面板处理，这里只重画。
+    var captured: NSImage? { didSet { needsDisplay = true } }
     private var hovered = false { didSet { needsDisplay = true } }
     var isSelected = false { didSet { needsDisplay = true } }
     var onClick: ((MenuBarItem, Bool) -> Void)?
@@ -17,15 +20,22 @@ final class ItemView: NSView {
 
     let itemWidth: CGFloat
 
-    init(item: MenuBarItem, image: NSImage?) {
+    /// 一个图标在面板里占的宽度：截图按原尺寸（不超过单元格高度时按比例缩）加 8 点边距，最少 24 点。
+    static func width(item: MenuBarItem, image: NSImage?, captured: NSImage?) -> CGFloat {
+        if let captured {
+            let scale = min(1, cellHeight / max(captured.size.height, 1))
+            return max(24, ceil(captured.size.width * scale) + 8)
+        }
+        if image != nil { return cellHeight + 4 }
+        let textWidth = (item.ownerName as NSString).size(withAttributes: labelAttributes).width
+        return ceil(textWidth) + 16
+    }
+
+    init(item: MenuBarItem, image: NSImage?, captured: NSImage?) {
         self.item = item
         self.image = image
-        if image != nil {
-            itemWidth = Self.cellHeight + 4
-        } else {
-            let textWidth = (item.ownerName as NSString).size(withAttributes: Self.labelAttributes).width
-            itemWidth = ceil(textWidth) + 16
-        }
+        self.captured = captured
+        itemWidth = Self.width(item: item, image: image, captured: captured)
         super.init(frame: NSRect(x: 0, y: 0, width: itemWidth, height: Self.cellHeight))
         toolTip = item.ownerName
         translatesAutoresizingMaskIntoConstraints = false
@@ -56,7 +66,12 @@ final class ItemView: NSView {
             NSColor.controlAccentColor.withAlphaComponent(isSelected ? 0.4 : 0.25).setFill()
             NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
         }
-        if let image {
+        if let captured {
+            let scale = min(1, Self.cellHeight / max(captured.size.height, 1))
+            let size = CGSize(width: captured.size.width * scale, height: captured.size.height * scale)
+            let rect = NSRect(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2, width: size.width, height: size.height)
+            captured.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
+        } else if let image {
             let side = Self.iconSize
             let rect = NSRect(x: (bounds.width - side) / 2, y: (bounds.height - side) / 2, width: side, height: side)
             image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
@@ -80,6 +95,8 @@ final class DropPanel: NSPanel, NSTextFieldDelegate {
     private var allEntries: [(MenuBarItem, NSImage?)] = []
     private var filtered: [(MenuBarItem, NSImage?)] = []
     private var itemViews: [ItemView] = []
+    /// 最近一次截到的真实图标，按窗口 ID。跨次打开保留，下次打开第一帧就有图。
+    private var captures: [CGWindowID: NSImage] = [:]
     private var selectedIndex = 0
     private var anchor: NSRect = .zero
     private let searchField = NSTextField()
@@ -188,7 +205,7 @@ final class DropPanel: NSPanel, NSTextFieldDelegate {
         var row = makeRow()
         var rowWidth: CGFloat = 0
         for (index, (item, image)) in filtered.enumerated() {
-            let view = ItemView(item: item, image: image)
+            let view = ItemView(item: item, image: image, captured: captures[item.windowID])
             view.isSelected = index == selectedIndex && !searchField.stringValue.isEmpty
             if rowWidth > 0, rowWidth + view.itemWidth > maxRowWidth {
                 rowsContainer.addArrangedSubview(row)
@@ -207,6 +224,28 @@ final class DropPanel: NSPanel, NSTextFieldDelegate {
             rowsContainer.addArrangedSubview(makeLabel(L("No matching app")))
         }
         relayout()
+    }
+
+    /// 新一帧截图：宽度没变的直接换图重画，有任何一个宽度变了就整体重排。
+    func updateCaptures(_ capture: ItemCapture.Result) {
+        let images = capture.images
+        guard !images.isEmpty else { return }
+        // 字形是白的就用深色外观，是黑的就用浅色外观，和菜单栏当前的画法一致。
+        let wanted: NSAppearance.Name = capture.glyphsAreLight ? .darkAqua : .aqua
+        if appearance?.name != wanted { appearance = NSAppearance(named: wanted) }
+        captures.merge(images) { _, new in new }
+        let needsRelayout = itemViews.contains { view in
+            guard let image = images[view.item.windowID] else { return false }
+            let width = ItemView.width(item: view.item, image: nil, captured: image)
+            return abs(width - view.itemWidth) > 0.5
+        }
+        if needsRelayout {
+            rebuildRows()
+        } else {
+            for view in itemViews {
+                if let image = images[view.item.windowID] { view.captured = image }
+            }
+        }
     }
 
     private func updateSelection() {

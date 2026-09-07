@@ -13,3 +13,5 @@
 "Clicking the cup opens the panel instead of expanding the menu bar" = "点杯子弹出面板，而不是在菜单栏展开";
 "No hidden items. ⌘-drag an item to the left of the cup to hide it." = "没有隐藏的图标。按住 ⌘ 把图标拖到杯子左边即可隐藏。";
 "On a display with a notch, open the panel instead" = "刘海屏上改为弹出面板";
+"Grant Screen Recording to see the real icons with badges and readings." = "授予屏幕录制权限后，面板里会显示真实的图标（含未读角标、读数）。";
+"Grant Screen Recording" = "授予屏幕录制权限";
